@@ -1,0 +1,14 @@
+{
+  "name": "space-shooter-2d",
+  "version": "1.0.0",
+  "description": "2D Space Shooter with polished UI",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^5.2.0"
+  }
+}
