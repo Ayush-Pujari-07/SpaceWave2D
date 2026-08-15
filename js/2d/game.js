@@ -1,86 +1,130 @@
 import { CONFIG, ENEMY_TYPES } from './config.js';
 import { InputManager } from './input.js';
 import { UI } from './ui.js';
+import { Sfx } from './audio.js';
+import { buildSprites } from './sprites.js';
+
+const STEP = 1 / 60; // fixed timestep: identical speed on 60/120/144Hz displays
 
 export class Game2D {
-  constructor(canvas){
+  constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.W = 0; this.H = 0;
     this.input = new InputManager();
     this.ui = new UI();
-    this.resize();
-    addEventListener('resize', ()=>this.resize());
-    
-    this.lastAutoShot = 0;
-    this.shieldBonus = 5;
+    this.sfx = new Sfx();
+    this.sprites = buildSprites();
+    this.dpr = 1;
+    this.best = +(localStorage.getItem('sw2d_best') || 0);
     this.state = 'menu';
 
-    this.ui.el.nextWave.onclick = ()=>this.nextWave();
-    this.ui.el.restart.onclick = ()=>this.restart();
-    this.ui.el.startBtn.onclick = ()=>this.startGame();
-    this.ui.el.resumeBtn.onclick = ()=>this.resumeGame();
-    this.ui.el.pauseRestart.onclick = ()=>this.restart();
+    this.resize();
+    addEventListener('resize', () => this.resize());
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && this.state === 'playing') this.pauseGame();
+    });
 
+    this.ui.el.startBtn.onclick = () => { this.sfx.ensure(); this.sfx.ui(); this.startGame(); };
+    this.ui.el.resumeBtn.onclick = () => { this.sfx.ui(); this.resumeGame(); };
+    this.ui.el.nextWave.onclick = () => { this.sfx.ui(); this.nextWave(); };
+    this.ui.el.restart.onclick = () => { this.sfx.ui(); this.startGame(); };
+    this.ui.el.pauseRestart.onclick = () => { this.sfx.ui(); this.startGame(); };
+
+    this.lastT = performance.now();
+    this.acc = 0;
     this.initMenu();
+    requestAnimationFrame(t => this.loop(t));
   }
 
-  resize(){
-    this.W = this.canvas.width = innerWidth;
-    this.H = this.canvas.height = innerHeight;
+  // ---------- setup ----------
+
+  resize() {
+    this.dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.W = innerWidth;
+    this.H = innerHeight;
+    this.canvas.width = this.W * this.dpr;
+    this.canvas.height = this.H * this.dpr;
+    this.canvas.style.width = this.W + 'px';
+    this.canvas.style.height = this.H + 'px';
     this.generateSpawnPoints();
+    this.buildBackground();
   }
 
-  generateSpawnPoints(){
+  generateSpawnPoints() {
     this.spawnPoints = [];
-    const count = CONFIG.spawnPointsCount || 12;
+    const count = CONFIG.spawnPointsCount;
     const radius = Math.max(this.W, this.H) * 0.55;
-    const cx = this.W / 2;
-    const cy = this.H / 2;
-    for(let i=0;i<count;i++){
-      const angle = (Math.PI * 2 * i) / count;
-      const x = cx + Math.cos(angle) * radius;
-      const y = cy + Math.sin(angle) * radius;
-      this.spawnPoints.push({x,y});
+    const cx = this.W / 2, cy = this.H / 2;
+    for (let i = 0; i < count; i++) {
+      const a = (Math.PI * 2 * i) / count;
+      this.spawnPoints.push({ x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius });
     }
   }
 
-  initMenu(){ 
+  buildBackground() {
+    this.stars = [];
+    const n = Math.floor((this.W * this.H) / 9000);
+    for (let i = 0; i < n; i++) {
+      const z = Math.random();
+      this.stars.push({ x: Math.random() * this.W, y: Math.random() * this.H, z: 0.2 + z * 0.8, s: 0.5 + z * 1.6 });
+    }
+    this.nebulae = [];
+    for (let i = 0; i < 3; i++) {
+      this.nebulae.push({
+        x: Math.random() * this.W, y: Math.random() * this.H,
+        scale: 1 + Math.random() * 1.5,
+        vx: (Math.random() - 0.5) * 5, vy: (Math.random() - 0.5) * 5,
+        img: this.sprites.nebulae[i % 3],
+      });
+    }
+  }
+
+  initMenu() {
     this.resetState();
     this.state = 'menu';
-    this.ui.showStart();
-    // clear enemies for menu view
-    this.enemies = [];
-    this.playerBullets = [];
-    this.enemyBullets = [];
-    this.pickups = [];
+    this.ui.showStart(this.best);
   }
 
-  startGame(){
+  startGame() {
     this.resetState();
     this.state = 'playing';
+    this.spawnWave();
     this.ui.hideStart();
+    this.ui.hidePause();
+    this.ui.hideGameOver();
+    this.ui.hideWaveComplete();
+    this.ui.showHUD();
+    this.lastT = performance.now();
+    this.acc = 0;
   }
 
-  pauseGame(){
-    if(this.state!=='playing') return;
-    this.state='paused';
+  pauseGame() {
+    if (this.state !== 'playing') return;
+    this.state = 'paused';
     this.ui.showPause(this.wave, this.score);
   }
 
-  resumeGame(){
-    if(this.state!=='paused') return;
-    this.state='playing';
+  resumeGame() {
+    if (this.state !== 'paused') return;
+    this.state = 'playing';
     this.ui.hidePause();
+    this.lastT = performance.now();
+    this.acc = 0;
   }
 
-  resetState(){
+  resetState() {
     this.score = 0;
     this.maxHealth = CONFIG.maxHealth;
-    this.health = CONFIG.maxHealth;
+    this.health = this.maxHealth;
     this.shieldTime = 0;
-    this.boostFuel = CONFIG.boostFuelMax;
-    this.gameOver = false;
+    this.boostFuelMax = CONFIG.boostFuelMax;
+    this.boostFuel = this.boostFuelMax;
+    this.playerDamage = CONFIG.playerDamage;
+    this.autoFireRate = CONFIG.autoFireRate;
+    this.shieldBonus = CONFIG.shieldDefault;
+    this.multishot = 1;
+    this.comboKills = 0;
+    this.comboTimer = 0;
     this.wave = 1;
     this.waveState = 'playing';
     this.waveTotal = 0;
@@ -88,400 +132,788 @@ export class Game2D {
     this.waveSpawnTimer = 0;
     this.waveSpawnComplete = false;
     this.waveSpawnedCount = 0;
-    this.playerDamage = CONFIG.playerDamage;
-    this.autoFireRate = CONFIG.autoFireRate;
-    this.boostFuelMax = CONFIG.boostFuelMax;
-    this.lastTime = performance.now();
-
-    this.ship = { x:this.W/2, y:this.H/2, vx:0, vy:0, angle:0, invuln:0 };
-    this.stars = [...Array(200)].map(()=>({x:Math.random()*this.W,y:Math.random()*this.H,z:Math.random()*0.8+0.2,s:Math.random()*1.5+0.5}));
+    this.time = 0;
+    this.lastShot = -9;
+    this.shake = 0;
+    this.banner = null;
+    this.ship = { x: this.W / 2, y: this.H / 2, vx: 0, vy: 0, angle: 0, invuln: 0 };
     this.enemies = [];
+    this.pendingSpawns = [];
     this.playerBullets = [];
     this.enemyBullets = [];
     this.pickups = [];
     this.particles = [];
-    this.shake = 0;
-
-    this.spawnWave();
+    this.popups = [];
+    this.rings = [];
+    this.beams = [];
   }
 
-  weightedPick(){
-    const total = Object.values(ENEMY_TYPES).reduce((a,t)=>a+t.weight,0);
-    let r = Math.random()*total;
-    for(const k in ENEMY_TYPES){ const t=ENEMY_TYPES[k]; r-=t.weight; if(r<=0) return k; }
+  // ---------- waves & spawning ----------
+
+  weightedPick() {
+    const w = this.wave;
+    const weights = {
+      scout: Math.min(70, 40 + w * 3),
+      fighter: 35,
+      tank: w >= 4 ? 12 + (w - 4) : 4,
+      sniper: w >= 3 ? 8 + (w - 3) * 2 : 0,
+    };
+    const total = Object.values(weights).reduce((a, b) => a + b, 0);
+    let r = Math.random() * total;
+    for (const k in weights) { r -= weights[k]; if (r <= 0) return k; }
     return 'fighter';
   }
 
-  spawnEnemy(){
-    // Occasionally spawn near the player for surprise attacks
-    const nearChance = CONFIG.spawnNearPlayerChance || 0;
-    let x, y;
-    const jitter = CONFIG.spawnJitter || 40;
-    if(Math.random() < nearChance){
-      const angle = Math.random() * Math.PI * 2;
-      const minDist = CONFIG.spawnNearMinDist || 120;
-      const maxDist = CONFIG.spawnNearMaxDist || 220;
-      const dist = minDist + Math.random() * (maxDist - minDist);
-      x = this.ship.x + Math.cos(angle) * dist;
-      y = this.ship.y + Math.sin(angle) * dist;
-    }else{
-      // Select a random spawn point and avoid spawning too close to player
-      let point = null;
-      const minSafe = CONFIG.spawnMinSafeDist;
-      let attempts = 0;
-      while(attempts < 10){
-        const sp = this.spawnPoints[Math.floor(Math.random()*this.spawnPoints.length)];
-        const dist = Math.hypot(this.ship.x - sp.x, this.ship.y - sp.y);
-        if(dist >= minSafe){
-          point = sp;
-          break;
-        }
-        attempts++;
-      }
-      if(!point){
-        // Fallback: pick furthest point from player
-        let best = null, bestDist = 0;
-        for(const sp of this.spawnPoints){
-          const d = Math.hypot(this.ship.x - sp.x, this.ship.y - sp.y);
-          if(d > bestDist){ bestDist = d; best = sp; }
-        }
-        point = best;
-      }
-      x = point.x + (Math.random()-0.5)*jitter;
-      y = point.y + (Math.random()-0.5)*jitter;
+  pickSpawnPos() {
+    if (Math.random() < CONFIG.spawnNearPlayerChance) {
+      const a = Math.random() * Math.PI * 2;
+      const d = CONFIG.spawnNearMin + Math.random() * (CONFIG.spawnNearMax - CONFIG.spawnNearMin);
+      return { x: this.ship.x + Math.cos(a) * d, y: this.ship.y + Math.sin(a) * d };
     }
-    const typeKey = this.weightedPick();
-    const type = ENEMY_TYPES[typeKey];
-    const hp = type.hpBase * (1 + (this.wave-1)*0.15);
+    const minSafe = 150;
+    for (let i = 0; i < 10; i++) {
+      const sp = this.spawnPoints[(Math.random() * this.spawnPoints.length) | 0];
+      if (Math.hypot(this.ship.x - sp.x, this.ship.y - sp.y) >= minSafe) {
+        return { x: sp.x + (Math.random() - 0.5) * CONFIG.spawnJitter, y: sp.y + (Math.random() - 0.5) * CONFIG.spawnJitter };
+      }
+    }
+    let best = null, bd = -1;
+    for (const sp of this.spawnPoints) {
+      const d = Math.hypot(this.ship.x - sp.x, this.ship.y - sp.y);
+      if (d > bd) { bd = d; best = sp; }
+    }
+    return { x: best.x, y: best.y };
+  }
+
+  spawnWave() {
+    this.waveTotal = CONFIG.waveEnemiesBase + (this.wave - 1) * CONFIG.waveEnemyGrowth;
+    this.waveRemainingToSpawn = this.waveTotal;
+    this.waveSpawnTimer = 0.3;
+    this.waveSpawnComplete = false;
+    this.waveSpawnedCount = 0;
+    this.banner = { text: `WAVE ${this.wave}`, t: 2, color: '#7dd3fc' };
+    if (this.wave % CONFIG.bossEvery === 0) {
+      this.pendingSpawns.push({ x: this.W / 2, y: 70, t: 1.8, type: 'boss' });
+      this.banner = { text: '⚠ OVERLORD INBOUND ⚠', t: 2.5, color: '#f472b6' };
+      this.sfx.bossWarning();
+    }
+  }
+
+  materializeSpawn(p) {
+    const t = ENEMY_TYPES[p.type];
+    const hp = t.hpBase * (1 + (this.wave - 1) * 0.15);
     this.enemies.push({
-      x,y,
-      vx:(Math.random()-0.5)*type.speed,
-      vy:(Math.random()-0.5)*type.speed,
-      r:type.r,
-      hp,hpMax:hp,
-      fireCooldown:Math.random()*type.fireRate,
-      angle:0,
-      type:typeKey,
-      color:type.color,
-      speed:type.speed,
-      fireRate:type.fireRate
+      x: p.x, y: p.y, vx: 0, vy: 0,
+      r: t.r, hp, hpMax: hp,
+      fireCooldown: t.fireRate * (0.5 + Math.random() * 0.8),
+      fireRate: Math.max(t.fireRate * 0.55, t.fireRate * (1 - this.wave * 0.015)),
+      windup: 0, angle: Math.random() * Math.PI * 2,
+      type: p.type, color: t.color, speed: t.speed,
+      flash: 0, strafeDir: Math.random() < 0.5 ? 1 : -1, strafeTimer: 1 + Math.random() * 2,
+      attackTimer: 2, spiralA: 0,
     });
     this.waveSpawnedCount++;
   }
 
-  spawnWave(){
-    this.waveTotal = CONFIG.waveEnemiesBase + (this.wave-1)*CONFIG.waveEnemyGrowth;
-    this.waveRemainingToSpawn = this.waveTotal;
-    this.waveSpawnComplete = false;
-    this.waveSpawnTimer = 0; // spawn first batch immediately
-    this.waveSpawnedCount = 0;
+  spawnPickup(x, y, type) {
+    this.pickups.push({ x, y, type, life: CONFIG.pickupLife });
   }
 
-  spawnPickup(x,y,type){ this.pickups.push({x,y,type,vy:-1,life:300}); }
-
-  addExplosion(x,y,color='#ffaa00',count=40){
-    for(let i=0;i<count;i++) this.particles.push({x,y,vx:(Math.random()-0.5)*6,vy:(Math.random()-0.5)*6,life:1,alpha:1,size:Math.random()*3+1,color});
+  startUpgradeScreen() {
+    this.waveState = 'upgrade';
+    this.sfx.waveClear();
+    const ms = Math.round(this.autoFireRate * 1000);
+    const options = [
+      { icon: '🎯', name: 'Laser Damage +1', desc: `Damage per shot: ${this.playerDamage} → ${this.playerDamage + 1}`, rarity: 'common', apply: () => { this.playerDamage += 1; } },
+      { icon: '❤️', name: 'Hull Plating', desc: 'Max health +25 and repair', rarity: 'common', apply: () => { this.maxHealth += 25; this.health = Math.min(this.maxHealth, this.health + 25); } },
+      { icon: '🛡️', name: 'Aegis Field', desc: `Shield duration: ${this.shieldBonus}s → ${this.shieldBonus + 2}s`, rarity: 'common', apply: () => { this.shieldBonus += 2; } },
+      { icon: '⚡', name: 'Ion Cells', desc: 'Boost fuel +25 (refilled)', rarity: 'common', apply: () => { this.boostFuelMax += 25; this.boostFuel = this.boostFuelMax; } },
+      { icon: '🔥', name: 'Overclock', desc: `Fire rate ×0.85 (${ms}ms → ${Math.round(ms * 0.85)}ms)`, rarity: 'rare', apply: () => { this.autoFireRate = Math.max(0.05, this.autoFireRate * 0.85); } },
+    ];
+    if (this.multishot < 3) {
+      options.push({ icon: '✨', name: 'Split Shot', desc: `+1 projectile (${this.multishot} → ${this.multishot + 1})`, rarity: 'epic', apply: () => { this.multishot += 1; } });
+    }
+    this.ui.showWaveComplete(this.wave, this.waveTotal, options, o => { o.apply(); this.nextWave(); });
   }
-  addParticles(x,y,color,count){
-    for(let i=0;i<count;i++) this.particles.push({x,y,vx:(Math.random()-0.5)*3,vy:(Math.random()-0.5)*3,life:1,alpha:1,size:2,color});
+
+  nextWave() {
+    this.ui.hideWaveComplete();
+    this.wave++;
+    this.boostFuel = this.boostFuelMax;
+    this.waveState = 'playing';
+    this.enemies.length = 0;
+    this.pendingSpawns.length = 0;
+    this.playerBullets.length = 0;
+    this.enemyBullets.length = 0;
+    this.pickups.length = 0;
+    this.particles.length = 0;
+    this.popups.length = 0;
+    this.rings.length = 0;
+    this.beams.length = 0;
+    this.spawnWave();
   }
 
-  findNearestTarget(){
-    let best=null,bestDist=CONFIG.autoRange;
-    for(const e of this.enemies){
-      const d=Math.hypot(this.ship.x-e.x,this.ship.y-e.y);
-      if(d<bestDist){bestDist=d;best=e;}
+  gameOver() {
+    this.state = 'gameover';
+    this.addShake(20);
+    this.sfx.explosion(true);
+    this.addExplosion(this.ship.x, this.ship.y, '#7dd3fc', 60);
+    const s = Math.floor(this.score);
+    const isNew = s > this.best;
+    if (isNew) { this.best = s; localStorage.setItem('sw2d_best', String(this.best)); }
+    this.ui.showGameOver(this.wave, s, this.best, isNew);
+  }
+
+  // ---------- fx helpers ----------
+
+  addParticle(x, y, vx, vy, life, size, color) {
+    if (this.particles.length >= CONFIG.particleCap) this.particles.shift();
+    this.particles.push({ x, y, vx, vy, life, maxLife: life, size, color });
+  }
+
+  addExplosion(x, y, color, count) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = 40 + Math.random() * 240;
+      this.addParticle(x, y, Math.cos(a) * sp, Math.sin(a) * sp, 0.3 + Math.random() * 0.5, 2 + Math.random() * 2.5, color);
+    }
+  }
+
+  addShake(mag) { this.shake = Math.min(26, this.shake + mag); }
+
+  addPopup(x, y, text, color = '#fde68a') {
+    this.popups.push({ x, y, text, life: 1, color });
+  }
+
+  rotateToward(a, b, max) {
+    let d = b - a;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    if (Math.abs(d) <= max) return b;
+    return a + Math.sign(d) * max;
+  }
+
+  // ---------- combat ----------
+
+  findNearestTarget() {
+    let best = null, bestDist = CONFIG.autoRange;
+    for (const e of this.enemies) {
+      const d = Math.hypot(this.ship.x - e.x, this.ship.y - e.y);
+      if (d < bestDist) { bestDist = d; best = e; }
     }
     return best;
   }
 
-  applyUpgrade(id){
-    if(id==='damage') this.playerDamage +=1;
-    else if(id==='firerate') this.autoFireRate = Math.max(60,this.autoFireRate-20);
-    else if(id==='health'){ this.maxHealth+=20; this.health+=20; }
-    else if(id==='shield'){ this.shieldBonus +=2; }
-    else if(id==='boost'){ this.boostFuelMax +=20; this.boostFuel = Math.min(this.boostFuel,this.boostFuelMax); }
+  shoot(angle) {
+    this.lastShot = this.time;
+    const n = this.multishot;
+    const spread = 0.12;
+    for (let i = 0; i < n; i++) {
+      const a = angle + (i - (n - 1) / 2) * spread;
+      this.playerBullets.push({
+        x: this.ship.x + Math.cos(a) * 26, y: this.ship.y + Math.sin(a) * 26,
+        vx: Math.cos(a) * CONFIG.bulletSpeed, vy: Math.sin(a) * CONFIG.bulletSpeed,
+        life: 1.2,
+      });
+    }
+    this.addParticle(
+      this.ship.x + Math.cos(angle) * 28, this.ship.y + Math.sin(angle) * 28,
+      0, 0, 0.08, 10, '#bae6fd'
+    );
+    this.sfx.shoot();
   }
 
-  startUpgradeScreen(){
-    this.waveState='upgrade';
-    const killed = this.waveTotal - this.enemies.length;
-    this.ui.showWaveComplete(this.wave, killed, this.waveTotal, (id)=>{
-      this.applyUpgrade(id);
-      this.nextWave();
+  enemyShoot(e, angle, speed, dmg) {
+    this.enemyBullets.push({
+      x: e.x + Math.cos(angle) * (e.r + 4), y: e.y + Math.sin(angle) * (e.r + 4),
+      vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+      life: 2.6, color: e.color, type: e.type, dmg,
     });
   }
 
-  nextWave(){
-    this.ui.hideWaveComplete();
-    this.wave++;
-    this.health = Math.min(this.maxHealth,this.health);
-    this.boostFuel = this.boostFuelMax;
-    this.waveState='playing';
-    this.enemies.length=0;
-    this.playerBullets.length=0;
-    this.enemyBullets.length=0;
-    this.pickups.length=0;
-    this.particles.length=0;
-    this.spawnWave();
+  damagePlayer(d) {
+    this.health -= d;
+    this.ship.invuln = 0.8;
+    this.addShake(12);
+    this.comboKills = 0;
+    this.sfx.playerHit();
+    this.addExplosion(this.ship.x, this.ship.y, '#ff5555', 18);
+    if (this.health <= 0) { this.health = 0; this.gameOver(); }
   }
 
-  restart(){
-    this.ui.hideGameOver();
-    this.ui.hidePause();
-    this.initMenu();
-  }
-
-  update(){
-    // handle pause toggle
-    if(this.state==='playing' && (this.input.isDown('p') || this.input.isDown('escape'))){
-      // debounce simple
-      this._pausePressed = true;
-      this.pauseGame();
-    } else if(this.state==='paused' && !this.input.isDown('p') && !this.input.isDown('escape')){
-      this._pausePressed = false;
+  killEnemy(e, i, byContact = false) {
+    const t = ENEMY_TYPES[e.type];
+    this.addExplosion(e.x, e.y, e.color, e.type === 'boss' ? 80 : 30);
+    this.rings.push({ x: e.x, y: e.y, r: e.r, life: 0.4, maxLife: 0.4, color: e.color });
+    this.addShake(e.type === 'boss' ? 18 : e.r > 20 ? 10 : 6);
+    this.sfx.explosion(e.type === 'boss');
+    if (!byContact) {
+      this.comboKills++;
+      this.comboTimer = 3;
+      const mult = Math.min(5, 1 + Math.floor(this.comboKills / 5));
+      const pts = Math.floor(t.score * mult);
+      this.score += pts;
+      this.addPopup(e.x, e.y, mult > 1 ? `+${pts} ×${mult}` : `+${pts}`);
     }
-    if(this.state!=='playing' || this.gameOver || this.waveState!=='playing') return;
+    const dropChance = e.type === 'boss' ? 1 : 0.3;
+    if (Math.random() < dropChance) {
+      this.spawnPickup(e.x, e.y, Math.random() < 0.35 ? 'shield' : 'health');
+      if (e.type === 'boss') this.spawnPickup(e.x + 34, e.y, 'health');
+    }
+    this.enemies.splice(i, 1);
+  }
 
-    // Delta time for spawn timing
-    const now = performance.now();
-    const delta = now - this.lastTime;
-    this.lastTime = now;
+  // ---------- main step (fixed 60Hz) ----------
 
-    // Randomized batch spawning
-    if(this.waveRemainingToSpawn > 0){
-      if(this.waveSpawnTimer <= 0){
-        // Determine batch size
+  step(dt) {
+    this.time += dt;
+
+    if (this.input.wasPressed('KeyM')) this.sfx.toggle();
+    if (this.input.wasPressed('KeyP') || this.input.wasPressed('Escape')) {
+      if (this.state === 'playing') this.pauseGame();
+      else if (this.state === 'paused') this.resumeGame();
+    }
+    if (this.input.wasPressed('KeyR') && this.state !== 'menu') this.startGame();
+
+    this.updateBackground(dt);
+    if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+
+    if (this.state !== 'playing' || this.waveState !== 'playing') return;
+
+    // --- pending spawn warnings → materialize ---
+    for (let i = this.pendingSpawns.length - 1; i >= 0; i--) {
+      const p = this.pendingSpawns[i];
+      p.t -= dt;
+      if (p.t <= 0) { this.pendingSpawns.splice(i, 1); this.materializeSpawn(p); }
+    }
+
+    // --- batch wave spawning ---
+    if (this.waveRemainingToSpawn > 0) {
+      this.waveSpawnTimer -= dt;
+      if (this.waveSpawnTimer <= 0) {
         const remaining = this.waveRemainingToSpawn;
         let batchSize;
-        const minBatch = CONFIG.spawnMinBatchSize;
-        const maxBatch = CONFIG.spawnMaxBatchSize;
-        if(remaining <= minBatch){
-          batchSize = remaining;
-        }else{
-          const maxSize = Math.min(maxBatch, remaining);
-          batchSize = minBatch + Math.floor(Math.random() * (maxSize - minBatch + 1));
-        }
-        // Spawn batch
-        for(let i=0;i<batchSize;i++){
-          this.spawnEnemy();
+        if (remaining <= CONFIG.spawnMinBatch) batchSize = remaining;
+        else batchSize = CONFIG.spawnMinBatch + Math.floor(Math.random() * (Math.min(CONFIG.spawnMaxBatch, remaining) - CONFIG.spawnMinBatch + 1));
+        for (let i = 0; i < batchSize; i++) {
+          const pos = this.pickSpawnPos();
+          this.pendingSpawns.push({ ...pos, t: CONFIG.spawnWarnTime, type: this.weightedPick() });
         }
         this.waveRemainingToSpawn -= batchSize;
-        // Schedule next batch
-        if(this.waveRemainingToSpawn > 0){
-          const minDelay = CONFIG.spawnMinDelay;
-          const maxDelay = CONFIG.spawnMaxDelay;
-          this.waveSpawnTimer = minDelay + Math.random() * (maxDelay - minDelay);
-        }else{
+        if (this.waveRemainingToSpawn > 0) {
+          this.waveSpawnTimer = CONFIG.spawnMinDelay + Math.random() * (CONFIG.spawnMaxDelay - CONFIG.spawnMinDelay);
+        } else {
           this.waveSpawnComplete = true;
-          this.waveSpawnTimer = 0;
         }
-      }else{
-        this.waveSpawnTimer -= delta;
       }
     }
 
-    const {ax,ay} = this.input.getMoveAxis();
-    const mag = Math.hypot(ax,ay)||1;
-    const boostActive = this.input.isBoosting() && this.boostFuel>0;
-    const curSpeed = boostActive? CONFIG.playerSpeed*CONFIG.boostMultiplier : CONFIG.playerSpeed;
-    
-    if(boostActive) this.boostFuel -= CONFIG.boostRate;
-    else this.boostFuel = Math.min(this.boostFuelMax,this.boostFuel + CONFIG.regenRate);
+    // --- player ---
+    const { ax, ay } = this.input.getMoveAxis();
+    const mag = Math.hypot(ax, ay);
+    const boosting = this.input.isBoosting() && this.boostFuel > 0;
+    if (boosting) this.boostFuel = Math.max(0, this.boostFuel - CONFIG.boostDrain * dt);
+    else this.boostFuel = Math.min(this.boostFuelMax, this.boostFuel + CONFIG.boostRegen * dt);
 
-    this.ship.vx += ax/mag * CONFIG.playerAcceleration;
-    this.ship.vy += ay/mag * CONFIG.playerAcceleration;
-    this.ship.vx *= CONFIG.playerFriction;
-    this.ship.vy *= CONFIG.playerFriction;
-    this.ship.x += this.ship.vx * curSpeed;
-    this.ship.y += this.ship.vy * curSpeed;
-    this.ship.x = Math.max(CONFIG.shipSize, Math.min(this.W-CONFIG.shipSize,this.ship.x));
-    this.ship.y = Math.max(CONFIG.shipSize, Math.min(this.H-CONFIG.shipSize,this.ship.y));
+    if (mag > 0) {
+      const acc = CONFIG.accel * (boosting ? CONFIG.boostMultiplier : 1);
+      this.ship.vx += (ax / mag) * acc * dt;
+      this.ship.vy += (ay / mag) * acc * dt;
+      const back = Math.atan2(-this.ship.vy, -this.ship.vx);
+      const tx = this.ship.x + Math.cos(back) * 14;
+      const ty = this.ship.y + Math.sin(back) * 14;
+      const n = boosting ? 3 : 1;
+      for (let k = 0; k < n; k++) {
+        this.addParticle(
+          tx, ty,
+          (Math.random() - 0.5) * 40 - this.ship.vx * 0.2,
+          (Math.random() - 0.5) * 40 - this.ship.vy * 0.2,
+          0.3 + Math.random() * 0.25, 2 + Math.random() * 2, boosting ? '#fbbf24' : '#38bdf8'
+        );
+      }
+    }
+    const damp = Math.exp(-CONFIG.damp * dt);
+    this.ship.vx *= damp;
+    this.ship.vy *= damp;
+    this.ship.x = Math.max(CONFIG.shipSize, Math.min(this.W - CONFIG.shipSize, this.ship.x + this.ship.vx * dt));
+    this.ship.y = Math.max(CONFIG.shipSize, Math.min(this.H - CONFIG.shipSize, this.ship.y + this.ship.vy * dt));
+    if (this.ship.invuln > 0) this.ship.invuln -= dt;
+    if (this.shieldTime > 0) this.shieldTime -= dt;
+    if (this.comboTimer > 0) { this.comboTimer -= dt; if (this.comboTimer <= 0) this.comboKills = 0; }
 
-    if(this.ship.invuln>0) this.ship.invuln -=1;
-    if(this.shieldTime>0) this.shieldTime -= 1/60;
-    this.stars.forEach(s=>{s.y += s.z*1.2; if(s.y>this.H) s.y=0;});
-
+    // --- aim (with lead prediction) & auto-fire ---
     const target = this.findNearestTarget();
-    if(target){
-      const angle = Math.atan2(target.y-this.ship.y,target.x-this.ship.x);
-      this.ship.angle = angle;
-      if(performance.now()-this.lastAutoShot > this.autoFireRate){
-        this.playerBullets.push({
-          x:this.ship.x+Math.cos(angle)*28,
-          y:this.ship.y+Math.sin(angle)*28,
-          vx:Math.cos(angle)*10,
-          vy:Math.sin(angle)*10,
-          life:90
-        });
-        this.addParticles(this.ship.x,this.ship.y,'#7dd3fc',6);
-        this.lastAutoShot = performance.now();
-      }
+    if (target) {
+      const d = Math.hypot(target.x - this.ship.x, target.y - this.ship.y);
+      const lead = d / CONFIG.bulletSpeed;
+      const tx = target.x + target.vx * lead;
+      const ty = target.y + target.vy * lead;
+      const angle = Math.atan2(ty - this.ship.y, tx - this.ship.x);
+      this.ship.angle = this.rotateToward(this.ship.angle, angle, CONFIG.turnRate * dt);
+      if (this.time - this.lastShot > this.autoFireRate) this.shoot(angle);
+    } else if (mag > 0) {
+      this.ship.angle = this.rotateToward(this.ship.angle, Math.atan2(this.ship.vy, this.ship.vx), CONFIG.turnRate * dt);
     }
 
-    // enemies
-    for(let i=this.enemies.length-1;i>=0;i--){
+    // --- enemies ---
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i];
-      const dx = this.ship.x-e.x, dy = this.ship.y-e.y;
-      const dist = Math.hypot(dx,dy);
-      const dir = Math.atan2(dy,dx);
-      e.angle = dir;
-      e.vx += Math.cos(dir)*0.02*e.speed/1.2;
-      e.vy += Math.sin(dir)*0.02*e.speed/1.2;
-      e.vx *= 0.98; e.vy *= 0.98;
-      e.x += e.vx; e.y += e.vy;
-      e.fireCooldown -= 16;
-      if(e.fireCooldown <= 0 && dist < 700){
-        const speed = e.type==='sniper'?7:5;
-        this.enemyBullets.push({x:e.x,y:e.y,vx:Math.cos(dir)*speed,vy:Math.sin(dir)*speed,life:240,color:e.color});
-        e.fireCooldown = e.fireRate*(0.6+Math.random()*0.8);
+      const t = ENEMY_TYPES[e.type];
+      const dx = this.ship.x - e.x, dy = this.ship.y - e.y;
+      const dist = Math.hypot(dx, dy) || 0.001;
+      const dir = Math.atan2(dy, dx);
+      e.flash = Math.max(0, e.flash - dt * 6);
+
+      // per-type steering
+      let moveAngle = dir, speedFactor = 1;
+      if (t.behavior === 'kite') {
+        e.strafeTimer -= dt;
+        if (e.strafeTimer <= 0) { e.strafeDir *= -1; e.strafeTimer = 1 + Math.random() * 1.5; }
+        const desired = 210;
+        const radial = dist > desired + 40 ? 1 : dist < desired - 40 ? -1 : 0;
+        const a = dir + (Math.PI / 2) * e.strafeDir;
+        moveAngle = Math.atan2(Math.sin(dir) * radial + Math.sin(a) * 1.2, Math.cos(dir) * radial + Math.cos(a) * 1.2);
+        speedFactor = 0.9;
+      } else if (t.behavior === 'snipe') {
+        const desired = 420;
+        const radial = dist > desired + 50 ? 1 : dist < desired - 50 ? -1 : 0;
+        const a = dir + (Math.PI / 2) * e.strafeDir;
+        moveAngle = Math.atan2(Math.sin(dir) * radial * 0.6 + Math.sin(a) * 0.8, Math.cos(dir) * radial * 0.6 + Math.cos(a) * 0.8);
+      } else if (t.behavior === 'boss') {
+        const desired = 300;
+        const radial = dist > desired + 60 ? 1 : dist < desired - 60 ? -1 : 0;
+        const a = dir + Math.PI / 2;
+        moveAngle = Math.atan2(Math.sin(dir) * radial + Math.sin(a) * 0.5, Math.cos(dir) * radial + Math.cos(a) * 0.5);
+        speedFactor = 0.7;
       }
-      if(this.ship.invuln===0 && dist < CONFIG.shipSize*0.8 + e.r*0.7){
-        if(this.shieldTime>0){
-          this.shake=8; this.addExplosion(e.x,e.y,'#60a5fa',25);
-          this.enemies.splice(i,1); this.spawnPickup(e.x,e.y,'health'); this.score+=150;
-        }else{
-          this.health -= 0.8; this.ship.invuln=30; this.shake=12; this.addExplosion(this.ship.x,this.ship.y,'#ff5555',20);
+
+      // separation so enemies don't clump into one blob
+      let sx = 0, sy = 0;
+      for (const o of this.enemies) {
+        if (o === e) continue;
+        const ddx = e.x - o.x, ddy = e.y - o.y;
+        const min = (e.r + o.r) * 0.9;
+        const d2 = ddx * ddx + ddy * ddy;
+        if (d2 > 0.01 && d2 < min * min) {
+          const d = Math.sqrt(d2);
+          const f = (1 - d / min) * 0.6;
+          sx += (ddx / d) * f; sy += (ddy / d) * f;
         }
       }
+
+      const k = Math.min(1, 3.5 * dt);
+      e.vx += ((Math.cos(moveAngle) * e.speed * speedFactor) - e.vx) * k + sx * e.speed * 9 * dt;
+      e.vy += ((Math.sin(moveAngle) * e.speed * speedFactor) - e.vy) * k + sy * e.speed * 9 * dt;
+      e.x += e.vx * dt;
+      e.y += e.vy * dt;
+      e.angle = this.rotateToward(e.angle, moveAngle, 4 * dt);
+
+      // --- firing ---
+      if (t.behavior === 'boss') {
+        e.attackTimer -= dt;
+        e.spiralA += dt;
+        if (e.attackTimer <= 0) {
+          e.attackTimer = t.fireRate;
+          e.attackMode = ((e.attackMode ?? -1) + 1) % 3;
+          const mode = e.attackMode;
+          if (mode === 0) {
+            for (let q = 0; q < 16; q++) this.enemyShoot(e, e.spiralA * 2 + q * Math.PI / 8, t.bulletSpeed, t.bulletDmg);
+          } else if (mode === 1) {
+            for (let q = -2; q <= 2; q++) this.enemyShoot(e, dir + q * 0.18, t.bulletSpeed * 1.2, t.bulletDmg);
+          } else {
+            for (let q = 0; q < 10; q++) this.enemyShoot(e, e.spiralA * 3 + q * Math.PI / 5, t.bulletSpeed, t.bulletDmg);
+            for (let q = 0; q < 10; q++) this.enemyShoot(e, -e.spiralA * 3 + q * Math.PI / 5, t.bulletSpeed * 0.8, t.bulletDmg);
+          }
+          this.sfx.enemyShoot();
+        }
+      } else if (t.behavior === 'snipe') {
+        if (e.windup > 0) {
+          e.windup -= dt;
+          if (e.windup <= 0) {
+            const a = Math.atan2(this.ship.y - e.y, this.ship.x - e.x);
+            this.enemyShoot(e, a, t.bulletSpeed, t.bulletDmg);
+            this.beams.push({ x: e.x, y: e.y, angle: a, life: 0.15 });
+            this.sfx.enemyShoot();
+          }
+        } else {
+          e.fireCooldown -= dt;
+          if (e.fireCooldown <= 0 && dist < 750) {
+            e.windup = t.windup;
+            e.fireCooldown = e.fireRate;
+          }
+        }
+      } else {
+        e.fireCooldown -= dt;
+        if (e.fireCooldown <= 0 && dist < 700) {
+          if (t.behavior === 'spread') {
+            for (let q = -1; q <= 1; q++) this.enemyShoot(e, dir + q * 0.22, t.bulletSpeed, t.bulletDmg);
+          } else {
+            this.enemyShoot(e, dir + (Math.random() - 0.5) * 0.1, t.bulletSpeed, t.bulletDmg);
+          }
+          e.fireCooldown = e.fireRate * (0.7 + Math.random() * 0.6);
+          if (Math.random() < 0.35) this.sfx.enemyShoot();
+        }
+      }
+
+      // --- contact: attacker dies, player takes real damage ---
+      if (this.ship.invuln <= 0 && dist < CONFIG.shipHitRadius + e.r * 0.75) {
+        this.killEnemy(e, i, true);
+        if (this.shieldTime > 0) this.addShake(6);
+        else this.damagePlayer(CONFIG.contactDamage);
+      }
     }
 
-    // player bullets
-    for(let bi=this.playerBullets.length-1; bi>=0; bi--){
+    // --- player bullets ---
+    for (let bi = this.playerBullets.length - 1; bi >= 0; bi--) {
       const b = this.playerBullets[bi];
-      b.x += b.vx; b.y += b.vy; b.life--;
-      if(b.life<=0 || b.x<0||b.x>this.W||b.y<0||b.y>this.H){ this.playerBullets.splice(bi,1); continue; }
-      for(let ei=this.enemies.length-1; ei>=0; ei--){
+      b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+      if (b.life <= 0 || b.x < -20 || b.x > this.W + 20 || b.y < -20 || b.y > this.H + 20) {
+        this.playerBullets.splice(bi, 1);
+        continue;
+      }
+      for (let ei = this.enemies.length - 1; ei >= 0; ei--) {
         const e = this.enemies[ei];
-        if(Math.hypot(b.x-e.x,b.y-e.y) < e.r){
+        if (Math.hypot(b.x - e.x, b.y - e.y) < e.r + 3) {
           e.hp -= this.playerDamage;
-          this.addExplosion(b.x,b.y,'#fde047',15);
-          this.playerBullets.splice(bi,1);
-          if(e.hp<=0){
-            this.addExplosion(e.x,e.y,e.color,50);
-            this.shake=10;
-            const type = Math.random()<0.3?'shield':'health';
-            this.spawnPickup(e.x,e.y,type);
-            this.score += 200 + (e.type==='tank'?100:0);
-            this.enemies.splice(ei,1);
-          }
+          e.flash = 1;
+          this.addExplosion(b.x, b.y, '#fde047', 6);
+          this.sfx.hit();
+          this.playerBullets.splice(bi, 1);
+          if (e.hp <= 0) this.killEnemy(e, ei);
           break;
         }
       }
     }
 
-    // enemy bullets
-    for(let i=this.enemyBullets.length-1;i>=0;i--){
-      const b=this.enemyBullets[i];
-      b.x+=b.vx; b.y+=b.vy; b.life--;
-      if(b.life<=0||b.x<0||b.x>this.W||b.y<0||b.y>this.H){ this.enemyBullets.splice(i,1); continue; }
-      if(Math.hypot(this.ship.x-b.x,this.ship.y-b.y)<20 && this.ship.invuln===0){
-        if(this.shieldTime>0){ this.shake=6; this.enemyBullets.splice(i,1); this.addExplosion(b.x,b.y,'#60a5fa',15); }
-        else { this.health-=5; this.ship.invuln=30; this.shake=10; this.addExplosion(b.x,b.y,'#ff5555',20); this.enemyBullets.splice(i,1); }
+    // --- enemy bullets ---
+    for (let i = this.enemyBullets.length - 1; i >= 0; i--) {
+      const b = this.enemyBullets[i];
+      b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+      if (b.life <= 0 || b.x < -20 || b.x > this.W + 20 || b.y < -20 || b.y > this.H + 20) {
+        this.enemyBullets.splice(i, 1);
+        continue;
+      }
+      if (Math.hypot(this.ship.x - b.x, this.ship.y - b.y) < CONFIG.shipHitRadius + 3 && this.ship.invuln <= 0) {
+        if (this.shieldTime > 0) {
+          this.addShake(5);
+          this.addExplosion(b.x, b.y, '#60a5fa', 12);
+        } else {
+          this.damagePlayer(b.dmg || 5);
+        }
+        this.enemyBullets.splice(i, 1);
       }
     }
 
-    // pickups
-    for(let i=this.pickups.length-1;i>=0;i--){
-      const p=this.pickups[i];
-      p.y+=p.vy; p.life--;
-      if(p.life<=0){ this.pickups.splice(i,1); continue; }
-      if(Math.hypot(this.ship.x-p.x,this.ship.y-p.y)<28){
-        if(p.type==='health') this.health=Math.min(this.maxHealth,this.health+25);
-        else this.shieldTime = this.shieldBonus;
-        this.score+=50;
-        this.addExplosion(p.x,p.y,'#22c55e',20);
-        this.pickups.splice(i,1);
+    // --- pickups (magnet + collect) ---
+    for (let i = this.pickups.length - 1; i >= 0; i--) {
+      const p = this.pickups[i];
+      p.life -= dt;
+      const dx = this.ship.x - p.x, dy = this.ship.y - p.y;
+      const d = Math.hypot(dx, dy);
+      if (d < CONFIG.pickupMagnet && d > 0.001) {
+        const pull = (1 - d / CONFIG.pickupMagnet) * 620;
+        p.x += (dx / d) * pull * dt;
+        p.y += (dy / d) * pull * dt;
       }
+      if (d < 26) {
+        if (p.type === 'health') {
+          this.health = Math.min(this.maxHealth, this.health + 25);
+          this.addPopup(p.x, p.y, '+25 HP', '#4ade80');
+          this.sfx.pickup();
+        } else {
+          this.shieldTime = this.shieldBonus;
+          this.addPopup(p.x, p.y, 'SHIELD', '#93c5fd');
+          this.sfx.shieldUp();
+        }
+        this.score += 50;
+        this.addExplosion(p.x, p.y, p.type === 'health' ? '#22c55e' : '#60a5fa', 16);
+        this.pickups.splice(i, 1);
+        continue;
+      }
+      if (p.life <= 0) this.pickups.splice(i, 1);
+    }
+
+    // --- particles / popups / rings / beams ---
+    const pd = Math.exp(-2.5 * dt);
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.life -= dt;
+      if (p.life <= 0) { this.particles.splice(i, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= pd; p.vy *= pd;
+    }
+    for (let i = this.popups.length - 1; i >= 0; i--) {
+      const p = this.popups[i];
+      p.life -= dt; p.y -= 40 * dt;
+      if (p.life <= 0) this.popups.splice(i, 1);
+    }
+    for (let i = this.rings.length - 1; i >= 0; i--) {
+      const r = this.rings[i];
+      r.life -= dt; r.r += 170 * dt;
+      if (r.life <= 0) this.rings.splice(i, 1);
+    }
+    for (let i = this.beams.length - 1; i >= 0; i--) {
+      this.beams[i].life -= dt;
+      if (this.beams[i].life <= 0) this.beams.splice(i, 1);
+    }
+
+    this.score += 2 * dt; // small survival drip (frame-rate independent)
+    if (this.shake > 0) this.shake = Math.max(0, this.shake - 40 * dt);
+
+    this.ui.updateHUD({
+      wave: this.wave,
+      waveTotal: this.waveTotal,
+      waveSpawnedCount: this.waveSpawnedCount,
+      enemies: this.enemies.length,
+      score: this.score,
+      best: this.best,
+      health: this.health,
+      maxHealth: this.maxHealth,
+      shieldTime: this.shieldTime,
+      boostFuel: this.boostFuel,
+      boostFuelMax: this.boostFuelMax,
+      combo: Math.min(5, 1 + Math.floor(this.comboKills / 5)),
+    });
+
+    if (this.state === 'playing' && this.enemies.length === 0 && this.waveSpawnComplete && this.pendingSpawns.length === 0) this.startUpgradeScreen();
+  }
+
+  updateBackground(dt) {
+    const spd = (this.state === 'playing' && this.input.isBoosting() && this.boostFuel > 0) ? 3 : 1;
+    for (const s of this.stars) {
+      s.y += s.z * 35 * spd * dt;
+      if (s.y > this.H) { s.y -= this.H; s.x = Math.random() * this.W; }
+    }
+    const m = 180;
+    for (const n of this.nebulae) {
+      n.x += n.vx * dt; n.y += n.vy * dt;
+      if (n.x < -m) n.x = this.W + m;
+      if (n.x > this.W + m) n.x = -m;
+      if (n.y < -m) n.y = this.H + m;
+      if (n.y > this.H + m) n.y = -m;
+    }
+  }
+
+  // ---------- rendering ----------
+
+  draw() {
+    const ctx = this.ctx;
+    const S = this.sprites;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.save();
+    if (this.shake > 0) ctx.translate((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake);
+
+    // background
+    const g = ctx.createRadialGradient(this.W / 2, this.H / 2, 0, this.W / 2, this.H / 2, Math.max(this.W, this.H));
+    g.addColorStop(0, '#020617');
+    g.addColorStop(1, '#000000');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, this.W, this.H);
+
+    for (const n of this.nebulae) {
+      const s = 320 * n.scale;
+      ctx.drawImage(n.img, n.x - s / 2, n.y - s / 2, s, s);
+    }
+    ctx.fillStyle = '#fff';
+    for (const s of this.stars) {
+      ctx.globalAlpha = 0.25 + s.z * 0.65;
+      ctx.fillRect(s.x, s.y, s.s, s.s);
+    }
+    ctx.globalAlpha = 1;
+
+    // pending spawn warnings (blinking diamond markers)
+    for (const p of this.pendingSpawns) {
+      const progress = 1 - p.t / CONFIG.spawnWarnTime;
+      const a = 0.3 + 0.7 * progress * (Math.sin(this.time * 20) > 0 ? 1 : 0.4);
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = p.type === 'boss' ? '#f472b6' : '#f87171';
+      ctx.lineWidth = 2;
+      const r = (p.type === 'boss' ? 26 : 10) + Math.sin(this.time * 12) * 2;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y - r); ctx.lineTo(p.x + r, p.y); ctx.lineTo(p.x, p.y + r); ctx.lineTo(p.x - r, p.y);
+      ctx.closePath(); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // sniper beams
+    ctx.lineWidth = 3;
+    for (const b of this.beams) {
+      ctx.strokeStyle = `rgba(196,181,253,${(b.life / 0.15) * 0.9})`;
+      ctx.beginPath();
+      ctx.moveTo(b.x, b.y);
+      ctx.lineTo(b.x + Math.cos(b.angle) * 900, b.y + Math.sin(b.angle) * 900);
+      ctx.stroke();
+    }
+
+    // enemies
+    for (const e of this.enemies) {
+      ctx.save();
+      ctx.translate(e.x, e.y);
+      ctx.rotate(e.angle);
+      const spr = S.enemies[e.type];
+      ctx.drawImage(spr, -spr.width / 2, -spr.width / 2);
+      if (e.flash > 0) {
+        ctx.globalAlpha = Math.min(1, e.flash);
+        const f = S.enemyFlash[e.type];
+        ctx.drawImage(f, -f.width / 2, -f.width / 2);
+        ctx.globalAlpha = 1;
+      }
+      ctx.restore();
+      // sniper windup telegraph
+      if (e.type === 'sniper' && e.windup > 0) {
+        const a = Math.atan2(this.ship.y - e.y, this.ship.x - e.x);
+        ctx.strokeStyle = `rgba(196,181,253,${0.2 + 0.5 * (1 - e.windup / 0.7)})`;
+        ctx.setLineDash([8, 8]);
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(e.x, e.y);
+        ctx.lineTo(e.x + Math.cos(a) * 700, e.y + Math.sin(a) * 700);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // hp bar for tanks & boss
+      if (e.hp < e.hpMax && (e.type === 'boss' || e.type === 'tank')) {
+        const bw = e.r * 1.6;
+        ctx.fillStyle = 'rgba(15,23,42,0.8)';
+        ctx.fillRect(e.x - bw / 2, e.y - e.r - 12, bw, 4);
+        ctx.fillStyle = '#f87171';
+        ctx.fillRect(e.x - bw / 2, e.y - e.r - 12, bw * (e.hp / e.hpMax), 4);
+      }
+    }
+
+    // bullets (sprite + streak)
+    ctx.lineWidth = 2;
+    for (const b of this.playerBullets) {
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = '#7dd3fc';
+      ctx.beginPath();
+      ctx.moveTo(b.x - b.vx * 0.02, b.y - b.vy * 0.02);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.drawImage(S.bullets.player, b.x - 24, b.y - 24);
+    }
+    for (const b of this.enemyBullets) {
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = b.color;
+      ctx.beginPath();
+      ctx.moveTo(b.x - b.vx * 0.015, b.y - b.vy * 0.015);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      const spr = S.bullets[b.type] || S.bullets.fighter;
+      ctx.drawImage(spr, b.x - 22, b.y - 22);
+    }
+
+    // pickups (pulse, blink near expiry)
+    for (const p of this.pickups) {
+      if (p.life < 2 && Math.sin(this.time * 16) > 0) continue;
+      const s = 36 * (1 + Math.sin(this.time * 6) * 0.08);
+      ctx.drawImage(S.pickups[p.type], p.x - s / 2, p.y - s / 2, s, s);
     }
 
     // particles
-    for(let i=this.particles.length-1;i>=0;i--){
-      const p=this.particles[i];
-      p.x+=p.vx; p.y+=p.vy; p.vy+=0.05; p.life-=0.018; p.alpha=p.life;
-      if(p.life<=0) this.particles.splice(i,1);
+    for (const p of this.particles) {
+      ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+
+    // shockwave rings
+    for (const r of this.rings) {
+      const a = r.life / r.maxLife;
+      ctx.globalAlpha = a * 0.8;
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = 2 + 6 * a;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // ship
+    if (this.state !== 'gameover') {
+      ctx.save();
+      ctx.translate(this.ship.x, this.ship.y);
+      ctx.rotate(this.ship.angle);
+      const boosting = this.input.isBoosting() && this.boostFuel > 0;
+      if (boosting) {
+        const fs = 52 + Math.random() * 10;
+        ctx.drawImage(S.flame, -20 - fs / 2, -fs / 2, fs, fs);
+      } else if (Math.hypot(this.ship.vx, this.ship.vy) > 40) {
+        const fs = 32 + Math.random() * 6;
+        ctx.globalAlpha = 0.8;
+        ctx.drawImage(S.flame, -18 - fs / 2, -fs / 2, fs, fs);
+        ctx.globalAlpha = 1;
+      }
+      // i-frame blink (alpha set BEFORE drawing — the old code set it after, so it never worked)
+      if (this.ship.invuln > 0 && Math.floor(this.time * 20) % 2 === 0) ctx.globalAlpha = 0.35;
+      ctx.drawImage(S.ship, -S.ship.width / 2, -S.ship.width / 2);
+      ctx.globalAlpha = 1;
+      ctx.restore();
+      if (this.shieldTime > 0) {
+        const w = 1 + Math.sin(this.time * 8) * 0.15;
+        ctx.strokeStyle = 'rgba(96,165,250,0.7)';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(this.ship.x, this.ship.y, (CONFIG.shipSize + 16) * w, 0, Math.PI * 2);
+        ctx.stroke();
+      }
     }
 
-    this.score += 0.15;
-    if(this.shake>0) this.shake -=1;
-
-    this.ui.updateHUD({
-      wave:this.wave,
-      waveTotal:this.waveTotal,
-      waveSpawnedCount:this.waveSpawnedCount,
-      enemies:this.enemies,
-      score:this.score,
-      health:this.health,
-      maxHealth:this.maxHealth,
-      shieldTime:this.shieldTime,
-      boostFuel:this.boostFuel,
-      boostFuelMax:this.boostFuelMax,
-    });
-
-    if(this.enemies.length===0 && this.waveSpawnComplete && this.waveState==='playing') this.startUpgradeScreen();
-    if(this.health<=0){
-      this.gameOver=true;
-      this.state='gameover';
-      this.ui.showGameOver(this.wave,this.score);
+    // score popups
+    ctx.font = 'bold 14px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    for (const p of this.popups) {
+      ctx.globalAlpha = Math.min(1, p.life);
+      ctx.fillStyle = p.color;
+      ctx.fillText(p.text, p.x, p.y);
     }
-  }
+    ctx.globalAlpha = 1;
 
-  draw(){
-    const ctx = this.ctx;
-    ctx.save();
-    if(this.shake>0) ctx.translate((Math.random()-0.5)*this.shake,(Math.random()-0.5)*this.shake);
-
-    const g = ctx.createRadialGradient(this.W/2,this.H/2,0,this.W/2,this.H/2,Math.max(this.W,this.H));
-    g.addColorStop(0,'#020617'); g.addColorStop(1,'#000000');
-    ctx.fillStyle=g; ctx.fillRect(0,0,this.W,this.H);
-
-    this.stars.forEach(s=>{ctx.globalAlpha=s.z*0.9; ctx.fillStyle='#fff'; ctx.fillRect(s.x,s.y,s.s,s.s);});
-    ctx.globalAlpha=1;
-
-    this.enemies.forEach(e=>{
-      ctx.save(); ctx.translate(e.x,e.y); ctx.rotate(e.angle);
-      ctx.shadowColor=e.color; ctx.shadowBlur=18;
-      ctx.fillStyle='#1f2937'; ctx.beginPath(); ctx.arc(0,0,e.r,0,Math.PI*2); ctx.fill();
-      ctx.fillStyle=e.color;
-      ctx.beginPath(); ctx.moveTo(e.r,0); ctx.lineTo(-e.r*0.6,e.r*0.7); ctx.lineTo(-e.r*0.6,-e.r*0.7); ctx.closePath(); ctx.fill();
-      ctx.shadowBlur=0; ctx.restore();
-    });
-
-    this.enemyBullets.forEach(b=>{ctx.fillStyle=b.color||'#f87171'; ctx.shadowColor=b.color; ctx.shadowBlur=12; ctx.beginPath(); ctx.arc(b.x,b.y,4,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0;});
-    this.playerBullets.forEach(b=>{ctx.fillStyle='#7dd3fc'; ctx.shadowColor='#7dd3fc'; ctx.shadowBlur=10; ctx.beginPath(); ctx.arc(b.x,b.y,3,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0;});
-    this.pickups.forEach(p=>{ctx.fillStyle=p.type==='health'?'#22c55e':'#60a5fa'; ctx.shadowColor=ctx.fillStyle; ctx.shadowBlur=14; ctx.beginPath(); ctx.arc(p.x,p.y,10,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0;});
-    this.particles.forEach(p=>{ctx.globalAlpha=p.alpha; ctx.fillStyle=p.color; ctx.fillRect(p.x,p.y,p.size,p.size);});
-    ctx.globalAlpha=1;
-
-    ctx.save();
-    ctx.translate(this.ship.x,this.ship.y);
-    ctx.rotate(this.ship.angle);
-    ctx.shadowColor='#7dd3fc'; ctx.shadowBlur=22;
-    const grad = ctx.createLinearGradient(-CONFIG.shipSize,0,CONFIG.shipSize,0);
-    grad.addColorStop(0,'#7dd3fc'); grad.addColorStop(1,'#1e40af');
-    ctx.fillStyle=grad;
-    ctx.beginPath();
-    ctx.moveTo(CONFIG.shipSize,0);
-    ctx.lineTo(-CONFIG.shipSize*0.7,-CONFIG.shipSize*0.7);
-    ctx.lineTo(-CONFIG.shipSize*0.4,0);
-    ctx.lineTo(-CONFIG.shipSize*0.7,CONFIG.shipSize*0.7);
-    ctx.closePath(); ctx.fill();
-    if(this.input.isBoosting() && this.boostFuel>0){ ctx.fillStyle='#fde047'; ctx.fillRect(-CONFIG.shipSize*0.6,0,14,7); }
-    if(this.ship.invuln%6<3) ctx.globalAlpha=0.5;
-    ctx.shadowBlur=0; ctx.restore();
-
-    if(this.shieldTime>0){
-      ctx.strokeStyle='rgba(96,165,250,0.8)'; ctx.lineWidth=3;
-      ctx.beginPath(); ctx.arc(this.ship.x,this.ship.y,CONFIG.shipSize+18,0,Math.PI*2); ctx.stroke();
+    // wave / boss banner
+    if (this.banner) {
+      ctx.globalAlpha = Math.min(1, this.banner.t);
+      ctx.font = 'bold 42px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = this.banner.color;
+      ctx.shadowColor = this.banner.color;
+      ctx.shadowBlur = 20;
+      ctx.fillText(this.banner.text, this.W / 2, this.H * 0.3);
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
     }
+
+    // low health vignette
+    if (this.state === 'playing' && this.health < this.maxHealth * 0.3) {
+      const a = Math.max(0, (0.3 - this.health / this.maxHealth) * 1.2 * (0.7 + 0.3 * Math.sin(this.time * 5)));
+      const v = ctx.createRadialGradient(this.W / 2, this.H / 2, Math.min(this.W, this.H) * 0.3, this.W / 2, this.H / 2, Math.max(this.W, this.H) * 0.7);
+      v.addColorStop(0, 'rgba(220,38,38,0)');
+      v.addColorStop(1, `rgba(220,38,38,${a.toFixed(3)})`);
+      ctx.fillStyle = v;
+      ctx.fillRect(0, 0, this.W, this.H);
+    }
+
     ctx.restore();
   }
 
-  loop(){
-    this.update();
-    this.draw();
-    requestAnimationFrame(()=>this.loop());
-  }
+  // ---------- loop ----------
 
-  start(){ this.loop(); }
+  loop(t) {
+    requestAnimationFrame(tt => this.loop(tt));
+    let frame = (t - this.lastT) / 1000;
+    this.lastT = t;
+    if (frame > 0.1) frame = 0.1; // clamp tab-switch gaps
+    this.acc += frame;
+    let steps = 0;
+    while (this.acc >= STEP && steps < 5) {
+      this.step(STEP);
+      this.acc -= STEP;
+      steps++;
+    }
+    if (steps === 5) this.acc = 0;
+    this.input.endFrame();
+    this.draw();
+  }
 }

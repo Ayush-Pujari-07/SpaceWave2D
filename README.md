@@ -1,18 +1,19 @@
 # Space Waves 2D
 
-A fast-paced 2D space shooter built with vanilla JavaScript and Vite. Navigate waves of enemies, manage boost fuel, collect pickups, and choose upgrades between waves.
+A fast-paced 2D space shooter built with vanilla JavaScript and Vite. Navigate waves of enemies, manage boost fuel, collect pickups, chain kill combos, and choose upgrades between waves. A boss appears every 5th wave.
 
 ## Features
 
-- Modular 2D game loop with canvas rendering
-- Randomized wave spawning with batch spawning and near-player surprises
-- Four enemy types: Scout, Fighter, Tank, Sniper
-- Auto-fire with aim assist
-- Boost mechanic with fuel regeneration
-- Shield pickups and health management
-- Upgrade screen after each wave
-- Polished HUD with wave progress, health, shield, boost, and enemy count
-- Pause, restart, and game over screens
+- **Fixed-timestep engine** (60Hz) — identical game speed on 60/120/144Hz displays
+- **Pre-rendered glow sprites** — crisp HiDPI rendering with no per-frame shadowBlur cost
+- **Distinct enemy AIs:** Scout (kiting strafe), Fighter (chase), Tank (3-shot spread), Sniper (telegraphed high-velocity beam), and the **Overlord boss** every 5 waves with 3 cycling attack patterns
+- **Fair spawning** — enemies telegraph with a blinking marker before materializing
+- **Aim assist with lead prediction** and smooth ship rotation
+- **Kill combo multiplier** (×1–×5) with floating score popups
+- **Synthesized audio** (Web Audio, no assets) with mute toggle
+- **High score persistence** via localStorage
+- Full game feel: screen shake, hit-flash, shockwave rings, bullet trails, engine flame, spawn warnings, low-health vignette, wave banners
+- Rarity-weighted upgrade cards (common / rare / epic)
 
 ## Tech Stack
 
@@ -23,78 +24,59 @@ A fast-paced 2D space shooter built with vanilla JavaScript and Vite. Navigate w
 
 ## Prerequisites
 
-- Node.js 18+ 
+- Node.js 18+
 - npm 9+
 
 ## Installation
 
-1. Clone the repository
 ```bash
 git clone <repo-url>
 cd SpaceShooter
-```
-
-2. Install dependencies
-```bash
 npm install
 ```
 
-## Setup and Run
-
-### Development server
-
-Start Vite dev server with hot reload:
-```bash
-npm run dev
-```
-
-The game will open automatically at http://localhost:3000
-
-### Build for production
-
-Create an optimized build:
-```bash
-npm run build
-```
-
-Output is written to `dist/`.
-
-### Preview production build
+## Run
 
 ```bash
-npm run preview
+npm run dev       # dev server at http://localhost:3000
+npm run build     # production build → dist/
+npm run preview   # preview production build
+npm test          # headless engine smoke test
 ```
 
 ## Controls
 
-- Move: WASD or Arrow Keys
-- Boost: Left Shift
-- Auto-fire: always on, aims at nearest enemy within range
-- Pause: P or Esc
-- Resume: Resume button on pause screen
-- Restart: Restart button on pause or game over screen
+| Key | Action |
+|---|---|
+| WASD / Arrows | Move |
+| Shift | Boost |
+| Auto-fire | Always on, leads the nearest enemy in range |
+| P / Esc | Pause / Resume |
+| R | Quick restart |
+| M | Sound on/off |
 
 ## Project Structure
 
 ```
 SpaceShooter/
 ├── index.html          # Game shell and UI overlays
-├── package.json
-├── vite.config.js
+├── smoke.mjs           # Headless engine smoke test
 └── js/
     └── 2d/
-        ├── config.js   # Game balance and enemy definitions
-        ├── game.js     # Core game loop, spawning, collisions
-        ├── input.js    # Keyboard input manager
+        ├── config.js   # Balance: player, waves, spawn system, enemy types
+        ├── game.js     # Fixed-step loop, AI, collisions, rendering
+        ├── input.js    # Keyboard input (layout-independent, edge detection)
+        ├── audio.js    # Synthesized SFX (Web Audio API)
+        ├── sprites.js  # Pre-rendered glow sprites and background art
         └── ui.js       # HUD and overlay management
 ```
 
-## Configuration
+## Balance Tuning
 
-Game balance values are in `js/2d/config.js`:
-- Ship size, speed, boost rates
-- Enemy types with color, speed, HP, fire rate, weight
-- Spawn system parameters
+All gameplay values live in `js/2d/config.js` (per-second units):
+- Player accel/boost, fire rate, auto-fire range, contact damage
+- Enemy types: speed, HP, fire rate, bullet speed/damage, behavior
+- Wave size/growth, boss frequency, spawn batch/delay/warning parameters
 
 ## License
 
