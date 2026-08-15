@@ -12,6 +12,7 @@ export class UI {
       enemyCount: document.getElementById('enemyCount'),
       waveBarFill: document.getElementById('waveBarFill'),
       boostFill: document.getElementById('boostFill'),
+      boostState: document.getElementById('boostState'),
       waveComplete: document.getElementById('waveComplete'),
       waveInfo: document.getElementById('waveInfo'),
       upgrades: document.getElementById('upgrades'),
@@ -55,6 +56,24 @@ export class UI {
     const progressPct = state.waveTotal > 0 ? Math.max(0, (killed / state.waveTotal) * 100) : 0;
     this.el.waveBarFill.style.width = `${progressPct}%`;
     this.el.boostFill.style.width = `${(state.boostFuel / state.boostFuelMax) * 100}%`;
+    // T02: three readable boost-fuel states (color + label + shape, not color alone)
+    const fill = this.el.boostFill, lbl = this.el.boostState;
+    if (state.fuelState === 'empty') {
+      fill.style.background = '#ef4444';
+      fill.className = 'fuel-empty';
+      lbl.textContent = '⚠ EMPTY — boost off';
+      lbl.style.color = '#ef4444';
+    } else if (state.fuelState === 'low') {
+      fill.style.background = '#f59e0b';
+      fill.className = 'pulse-low';
+      lbl.textContent = 'LOW';
+      lbl.style.color = '#f59e0b';
+    } else {
+      fill.style.background = 'var(--good)';
+      fill.className = '';
+      lbl.textContent = '';
+      lbl.style.color = '';
+    }
   }
   showWaveComplete(wave, total, options, onPick) {
     this.el.waveInfo.textContent = `Wave ${wave} cleared — ${total} enemies eliminated.`;

@@ -66,6 +66,8 @@ export class Sfx {
     this.tone({ f0: 780, f1: 1040, dur: 0.1, vol: 0.14, delay: 0.07 });
   }
   shieldUp() { this.tone({ f0: 300, f1: 620, dur: 0.25, vol: 0.15 }); }
+  fuelLow() { this.tone({ type: 'sine', f0: 320, f1: 240, dur: 0.14, vol: 0.1 }); }
+  fuelEmpty() { this.tone({ type: 'sawtooth', f0: 170, f1: 70, dur: 0.24, vol: 0.13 }); }
   playerHit() {
     this.noise({ dur: 0.2, vol: 0.35, freq: 1200 });
     this.tone({ type: 'sawtooth', f0: 160, f1: 60, dur: 0.25, vol: 0.25 });

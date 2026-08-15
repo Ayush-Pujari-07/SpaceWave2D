@@ -37,6 +37,11 @@ export const CONFIG = {
   pickupMagnet: 130,
   dropChanceEnemy: 0.18,   // was 0.3 — scarcer drops, healing is now a resource
   dropChanceBoss: 0.8,     // was 1 — boss usually (not always) drops
+  // T02: fuel pickups & boost clarity
+  fuelPickupRestore: 45,   // boost fuel restored by a fuel pickup (capped at boostFuelMax)
+  fuelLowThreshold: 0.25,  // fraction of boostFuelMax that flags "low fuel"
+  fuelRecoverRatio: 0.2,   // fraction of boostFuelMax fuel must recover to before boost re-engages after empty
+  fuelDropChance: 0.12,    // chance a defeated (non-boss) enemy also drops a fuel pickup
   // fx
   particleCap: 320,
 };
@@ -52,4 +57,5 @@ export const ENEMY_TYPES = {
 export const PICKUP_TYPES = {
   health: { color: '#22c55e' },
   shield: { color: '#60a5fa' },
+  fuel:   { color: '#fbbf24' },
 };

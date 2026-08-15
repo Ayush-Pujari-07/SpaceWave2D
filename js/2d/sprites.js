@@ -116,20 +116,30 @@ function flameSprite() {
 }
 
 function pickupSprite(kind) {
+  const palette = { health: ['#22c55e', '#4ade80'], shield: ['#60a5fa', '#93c5fd'], fuel: ['#fbbf24', '#fde047'] }[kind] || ['#22c55e', '#4ade80'];
   return makeCanvas(48, (ctx, cx) => {
-    const c = kind === 'health' ? '#22c55e' : '#60a5fa';
-    ctx.shadowColor = c;
+    ctx.shadowColor = palette[0];
     ctx.shadowBlur = 12;
     ctx.fillStyle = 'rgba(15,23,42,0.9)';
     ctx.beginPath(); ctx.arc(cx, cx, 11, 0, Math.PI * 2); ctx.fill();
     ctx.lineWidth = 2;
-    ctx.strokeStyle = c;
+    ctx.strokeStyle = palette[0];
     ctx.stroke();
     ctx.shadowBlur = 0;
-    ctx.fillStyle = kind === 'health' ? '#4ade80' : '#93c5fd';
+    ctx.fillStyle = palette[1];
     if (kind === 'health') {
       ctx.fillRect(cx - 6, cx - 2, 12, 4);
       ctx.fillRect(cx - 2, cx - 6, 4, 12);
+    } else if (kind === 'fuel') {
+      // lightning bolt (distinct from health cross and shield key)
+      ctx.beginPath();
+      ctx.moveTo(cx + 2, cx - 7);
+      ctx.lineTo(cx - 4, cx + 1);
+      ctx.lineTo(cx - 0.5, cx + 1);
+      ctx.lineTo(cx - 2, cx + 7);
+      ctx.lineTo(cx + 4, cx - 1);
+      ctx.lineTo(cx + 0.5, cx - 1);
+      ctx.closePath(); ctx.fill();
     } else {
       ctx.beginPath();
       ctx.moveTo(cx, cx - 6);
@@ -169,6 +179,7 @@ export function buildSprites() {
   S.flame = flameSprite();
   S.pickups.health = pickupSprite('health');
   S.pickups.shield = pickupSprite('shield');
+  S.pickups.fuel = pickupSprite('fuel');
   S.nebulae = [
     nebulaSprite('rgba(59,130,246,0.10)'),
     nebulaSprite('rgba(124,58,237,0.09)'),

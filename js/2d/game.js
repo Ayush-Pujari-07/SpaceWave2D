@@ -146,6 +146,31 @@ export class Game2D {
     this.popups = [];
     this.rings = [];
     this.beams = [];
+    // T01: run/wave metrics
+    this.wasBoosting = false;
+    this.fuelState = 'normal'; // T02: normal | low | empty
+    this.boostLocked = false; // T02: true while boost is locked out after empty fuel
+    this.runStats = {
+      elapsed: 0,
+      enemiesKilled: 0,
+      pickupsCollected: 0,
+      damageTaken: 0,
+      hitsTaken: 0,
+      boostsUsed: 0,
+      fuelDepletedCount: 0,
+      highestCombo: 1,
+      perfectWaves: 0,
+    };
+    this.resetWaveStats();
+  }
+
+  resetWaveStats() {
+    this.waveStats = {
+      damageTaken: 0,
+      hitsTaken: 0,
+      enemiesKilled: 0,
+      startedAt: this.time,
+    };
   }
 
   // ---------- waves & spawning ----------
@@ -239,6 +264,7 @@ export class Game2D {
   nextWave() {
     this.ui.hideWaveComplete();
     this.wave++;
+    this.resetWaveStats(); // T01: wave metrics reset when a new wave starts
     this.boostFuel = this.boostFuelMax;
     this.waveState = 'playing';
     this.enemies.length = 0;
@@ -333,6 +359,11 @@ export class Game2D {
 
   damagePlayer(d) {
     this.health -= d;
+    // T01: unshielded damage (shielded hits never reach this method)
+    this.runStats.damageTaken += d;
+    this.runStats.hitsTaken += 1;
+    this.waveStats.damageTaken += d;
+    this.waveStats.hitsTaken += 1;
     this.ship.invuln = 0.8;
     this.addShake(12);
     this.comboKills = 0;
@@ -350,6 +381,8 @@ export class Game2D {
     if (!byContact) {
       this.comboKills++;
       this.comboTimer = 3;
+      this.runStats.enemiesKilled++;
+      this.waveStats.enemiesKilled++;
       const mult = Math.min(5, 1 + Math.floor(this.comboKills / 5));
       const pts = Math.floor(t.score * mult);
       this.score += pts;
@@ -359,6 +392,10 @@ export class Game2D {
     if (Math.random() < dropChance) {
       this.spawnPickup(e.x, e.y, Math.random() < 0.35 ? 'shield' : 'health');
       if (e.type === 'boss' && Math.random() < 0.5) this.spawnPickup(e.x + 34, e.y, 'health');
+    }
+    // T02: independent fuel drop — additive, does not replace health/shield
+    if (e.type !== 'boss' && Math.random() < CONFIG.fuelDropChance) {
+      this.spawnPickup(e.x + (Math.random() < 0.5 ? -26 : 26), e.y + 12, 'fuel');
     }
     this.enemies.splice(i, 1);
   }
@@ -379,6 +416,9 @@ export class Game2D {
     if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
 
     if (this.state !== 'playing' || this.waveState !== 'playing') return;
+
+    // T01: run time counts only while actively playing a wave
+    this.runStats.elapsed += dt;
 
     // --- pending spawn warnings → materialize ---
     for (let i = this.pendingSpawns.length - 1; i >= 0; i--) {
@@ -411,9 +451,26 @@ export class Game2D {
     // --- player ---
     const { ax, ay } = this.input.getMoveAxis();
     const mag = Math.hypot(ax, ay);
-    const boosting = this.input.isBoosting() && this.boostFuel > 0;
+    const boosting = this.input.isBoosting() && this.boostFuel > 0 && !this.boostLocked;
+    if (boosting && !this.wasBoosting) this.runStats.boostsUsed++;
+    this.wasBoosting = boosting;
+    const fuelWasPositive = this.boostFuel > 0;
     if (boosting) this.boostFuel = Math.max(0, this.boostFuel - CONFIG.boostDrain * dt);
     else this.boostFuel = Math.min(this.boostFuelMax, this.boostFuel + CONFIG.boostRegen * dt);
+    // T02: empty-fuel lockout (hysteresis) — boost stays off until fuel recovers,
+    // so holding Shift at empty can't flap the fuel or spam sounds/counters
+    if (this.boostFuel <= 0 && fuelWasPositive) { this.boostLocked = true; this.runStats.fuelDepletedCount++; }
+    if (this.boostLocked && this.boostFuel >= this.boostFuelMax * CONFIG.fuelRecoverRatio) this.boostLocked = false;
+    // T02: boost fuel state machine → drives HUD + one-shot transition sounds
+    {
+      const ratio = this.boostFuel / this.boostFuelMax;
+      const ns = this.boostFuel <= 0 ? 'empty' : ratio < CONFIG.fuelLowThreshold ? 'low' : 'normal';
+      if (ns !== this.fuelState) {
+        if (ns === 'empty') this.sfx.fuelEmpty();
+        else if (ns === 'low' && this.fuelState === 'normal') this.sfx.fuelLow();
+        this.fuelState = ns;
+      }
+    }
 
     if (mag > 0) {
       const acc = CONFIG.accel * (boosting ? CONFIG.boostMultiplier : 1);
@@ -616,9 +673,14 @@ export class Game2D {
         p.y += (dy / d) * pull * dt;
       }
       if (d < 26) {
+        this.runStats.pickupsCollected++;
         if (p.type === 'health') {
           this.health = Math.min(this.maxHealth, this.health + 25);
           this.addPopup(p.x, p.y, '+25 HP', '#4ade80');
+          this.sfx.pickup();
+        } else if (p.type === 'fuel') {
+          this.boostFuel = Math.min(this.boostFuelMax, this.boostFuel + CONFIG.fuelPickupRestore);
+          this.addPopup(p.x, p.y, `+${CONFIG.fuelPickupRestore} FUEL`, '#fde047');
           this.sfx.pickup();
         } else {
           this.shieldTime = this.shieldBonus;
@@ -626,7 +688,8 @@ export class Game2D {
           this.sfx.shieldUp();
         }
         this.score += 50;
-        this.addExplosion(p.x, p.y, p.type === 'health' ? '#22c55e' : '#60a5fa', 16);
+        const pc = p.type === 'health' ? '#22c55e' : p.type === 'fuel' ? '#fbbf24' : '#60a5fa';
+        this.addExplosion(p.x, p.y, pc, 16);
         this.pickups.splice(i, 1);
         continue;
       }
@@ -660,6 +723,10 @@ export class Game2D {
     this.score += 2 * dt; // small survival drip (frame-rate independent)
     if (this.shake > 0) this.shake = Math.max(0, this.shake - 40 * dt);
 
+    // T01: track the highest displayed combo multiplier this run
+    const comboMult = Math.min(5, 1 + Math.floor(this.comboKills / 5));
+    if (comboMult > this.runStats.highestCombo) this.runStats.highestCombo = comboMult;
+
     this.ui.updateHUD({
       wave: this.wave,
       waveTotal: this.waveTotal,
@@ -672,6 +739,7 @@ export class Game2D {
       shieldTime: this.shieldTime,
       boostFuel: this.boostFuel,
       boostFuelMax: this.boostFuelMax,
+      fuelState: this.fuelState,
       combo: Math.min(5, 1 + Math.floor(this.comboKills / 5)),
     });
 
