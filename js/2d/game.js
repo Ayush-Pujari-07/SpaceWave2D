@@ -26,7 +26,7 @@ export class Game2D {
 
     this.ui.el.startBtn.onclick = () => { this.sfx.ensure(); this.sfx.ui(); this.startGame(); };
     this.ui.el.resumeBtn.onclick = () => { this.sfx.ui(); this.resumeGame(); };
-    this.ui.el.nextWave.onclick = () => { this.sfx.ui(); this.nextWave(); };
+    this.ui.el.nextWave.onclick = () => { this.sfx.ui(); this.skipUpgrade(); };
     this.ui.el.restart.onclick = () => { this.sfx.ui(); this.startGame(); };
     this.ui.el.pauseRestart.onclick = () => { this.sfx.ui(); this.startGame(); };
 
@@ -123,6 +123,16 @@ export class Game2D {
     this.autoFireRate = CONFIG.autoFireRate;
     this.shieldBonus = CONFIG.shieldDefault;
     this.multishot = 1;
+    this.shotSpread = 0.12;
+    // T03: run-local upgrade values; imported CONFIG remains immutable.
+    this.playerAccel = CONFIG.accel;
+    this.boostMultiplier = CONFIG.boostMultiplier;
+    this.boostDrain = CONFIG.boostDrain;
+    this.pickupMagnet = CONFIG.pickupMagnet;
+    this.contactDamageMultiplier = 1;
+    this.selectedUpgradeIds = new Set();
+    this.upgradeChoiceResolved = false;
+    this.upgradeDefinitions = this.createUpgradeDefinitions();
     this.comboKills = 0;
     this.comboTimer = 0;
     this.wave = 1;
@@ -171,6 +181,89 @@ export class Game2D {
       enemiesKilled: 0,
       startedAt: this.time,
     };
+  }
+
+  // ---------- upgrades ----------
+
+  formatUpgradeNumber(value) {
+    return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, '');
+  }
+
+  createUpgradeDefinitions() {
+    const f = value => this.formatUpgradeNumber(value);
+    const once = id => game => !game.selectedUpgradeIds.has(id);
+    return [
+      {
+        id: 'hull-reinforcement', icon: '❤️', name: 'Hull Reinforcement', rarity: 'common', role: 'Survival', kind: 'reward',
+        description: `Max health +${f(CONFIG.upgradeHullMaxHealth)} and repair ${f(CONFIG.upgradeHullMaxHealth)} health`,
+        isEligible: once('hull-reinforcement'),
+        apply: game => { game.maxHealth += CONFIG.upgradeHullMaxHealth; game.health = Math.min(game.maxHealth, game.health + CONFIG.upgradeHullMaxHealth); },
+      },
+      {
+        id: 'ion-reserve', icon: '⚡', name: 'Ion Reserve', rarity: 'common', role: 'Mobility', kind: 'reward',
+        description: `Boost capacity +${f(CONFIG.upgradeFuelCapacity)} and refill`,
+        isEligible: once('ion-reserve'),
+        apply: game => { game.boostFuelMax += CONFIG.upgradeFuelCapacity; game.boostFuel = game.boostFuelMax; },
+      },
+      {
+        id: 'tractor-field', icon: '🧲', name: 'Tractor Field', rarity: 'common', role: 'Utility', kind: 'reward',
+        description: `Pickup magnet +${f(CONFIG.upgradePickupMagnet)} range`,
+        isEligible: once('tractor-field'),
+        apply: game => { game.pickupMagnet += CONFIG.upgradePickupMagnet; },
+      },
+      {
+        id: 'aegis-field', icon: '🛡️', name: 'Aegis Field', rarity: 'common', role: 'Survival', kind: 'reward',
+        description: `Shield duration +${f(CONFIG.upgradeShieldDuration)}s`,
+        isEligible: once('aegis-field'),
+        apply: game => { game.shieldBonus += CONFIG.upgradeShieldDuration; },
+      },
+      {
+        id: 'heavy-cannon', icon: '🎯', name: 'Heavy Cannon', rarity: 'rare', role: 'Precision', kind: 'tradeoff',
+        description: `Damage +${f(CONFIG.heavyCannonDamage)} (${f(this.playerDamage)} → ${f(this.playerDamage + CONFIG.heavyCannonDamage)}); fire interval +${f((CONFIG.heavyCannonFireRateMultiplier - 1) * 100)}%`,
+        isEligible: once('heavy-cannon'),
+        apply: game => { game.playerDamage += CONFIG.heavyCannonDamage; game.autoFireRate *= CONFIG.heavyCannonFireRateMultiplier; },
+      },
+      {
+        id: 'split-shot', icon: '✨', name: 'Split Shot', rarity: 'epic', role: 'Horde', kind: 'tradeoff',
+        description: `+${f(CONFIG.splitShotProjectiles)} projectile and spread +${f(CONFIG.splitShotSpread)} rad; fire interval +${f((CONFIG.splitShotFireRateMultiplier - 1) * 100)}%`,
+        isEligible: game => !game.selectedUpgradeIds.has('split-shot') && game.multishot < 3,
+        apply: game => { game.multishot = Math.min(3, game.multishot + CONFIG.splitShotProjectiles); game.shotSpread += CONFIG.splitShotSpread; game.autoFireRate *= CONFIG.splitShotFireRateMultiplier; },
+      },
+      {
+        id: 'overcharged-thrusters', icon: '🔥', name: 'Overcharged Thrusters', rarity: 'rare', role: 'Mobility', kind: 'tradeoff',
+        description: `Boost effect +${f(CONFIG.overchargedBoostMultiplier)}x (${f(this.boostMultiplier)}x → ${f(this.boostMultiplier + CONFIG.overchargedBoostMultiplier)}x); fuel drain +${f((CONFIG.overchargedBoostDrainMultiplier - 1) * 100)}%`,
+        isEligible: once('overcharged-thrusters'),
+        apply: game => { game.boostMultiplier += CONFIG.overchargedBoostMultiplier; game.boostDrain *= CONFIG.overchargedBoostDrainMultiplier; },
+      },
+      {
+        id: 'heavy-plating', icon: '🧱', name: 'Heavy Plating', rarity: 'rare', role: 'Survival', kind: 'tradeoff',
+        description: `Max health +${f(CONFIG.heavyPlatingMaxHealth)}; contact damage -${f((1 - CONFIG.heavyPlatingContactDamageMultiplier) * 100)}%; acceleration -${f((1 - CONFIG.heavyPlatingAccelMultiplier) * 100)}%`,
+        isEligible: once('heavy-plating'),
+        apply: game => { game.maxHealth += CONFIG.heavyPlatingMaxHealth; game.health = Math.min(game.maxHealth, game.health + CONFIG.heavyPlatingMaxHealth); game.contactDamageMultiplier *= CONFIG.heavyPlatingContactDamageMultiplier; game.playerAccel *= CONFIG.heavyPlatingAccelMultiplier; },
+      },
+      {
+        id: 'blood-shield', icon: '🩸', name: 'Blood Shield', rarity: 'epic', role: 'Risk', kind: 'tradeoff',
+        description: 'Reserved for a future risky sustain mutation',
+        isEligible: () => false,
+        apply: () => {},
+      },
+    ];
+  }
+
+  selectUpgrade(option) {
+    if (this.waveState !== 'upgrade' || this.upgradeChoiceResolved) return;
+    const current = this.upgradeDefinitions.find(o => o.id === option.id);
+    if (!current || !current.isEligible(this)) return;
+    this.upgradeChoiceResolved = true;
+    current.apply(this);
+    this.selectedUpgradeIds.add(current.id);
+    this.nextWave();
+  }
+
+  skipUpgrade() {
+    if (this.waveState !== 'upgrade' || this.upgradeChoiceResolved) return;
+    this.upgradeChoiceResolved = true;
+    this.nextWave();
   }
 
   // ---------- waves & spawning ----------
@@ -246,19 +339,12 @@ export class Game2D {
 
   startUpgradeScreen() {
     this.waveState = 'upgrade';
+    this.upgradeChoiceResolved = false;
     this.sfx.waveClear();
-    const ms = Math.round(this.autoFireRate * 1000);
-    const options = [
-      { icon: '🎯', name: 'Laser Damage +1', desc: `Damage per shot: ${this.playerDamage} → ${this.playerDamage + 1}`, rarity: 'common', apply: () => { this.playerDamage += 1; } },
-      { icon: '❤️', name: 'Hull Plating', desc: 'Max health +25 and repair', rarity: 'common', apply: () => { this.maxHealth += 25; this.health = Math.min(this.maxHealth, this.health + 25); } },
-      { icon: '🛡️', name: 'Aegis Field', desc: `Shield duration: ${this.shieldBonus}s → ${this.shieldBonus + 2}s`, rarity: 'common', apply: () => { this.shieldBonus += 2; } },
-      { icon: '⚡', name: 'Ion Cells', desc: 'Boost fuel +25 (refilled)', rarity: 'common', apply: () => { this.boostFuelMax += 25; this.boostFuel = this.boostFuelMax; } },
-      { icon: '🔥', name: 'Overclock', desc: `Fire rate ×0.85 (${ms}ms → ${Math.round(ms * 0.85)}ms)`, rarity: 'rare', apply: () => { this.autoFireRate = Math.max(0.05, this.autoFireRate * 0.85); } },
-    ];
-    if (this.multishot < 3) {
-      options.push({ icon: '✨', name: 'Split Shot', desc: `+1 projectile (${this.multishot} → ${this.multishot + 1})`, rarity: 'epic', apply: () => { this.multishot += 1; } });
-    }
-    this.ui.showWaveComplete(this.wave, this.waveTotal, options, o => { o.apply(); this.nextWave(); });
+    // Rebuild descriptions from current run values so displayed numbers stay truthful.
+    this.upgradeDefinitions = this.createUpgradeDefinitions();
+    const options = this.upgradeDefinitions.filter(o => o.isEligible(this));
+    this.ui.showWaveComplete(this.wave, this.waveTotal, options, o => this.selectUpgrade(o));
   }
 
   nextWave() {
@@ -333,7 +419,7 @@ export class Game2D {
   shoot(angle) {
     this.lastShot = this.time;
     const n = this.multishot;
-    const spread = 0.12;
+    const spread = this.shotSpread;
     for (let i = 0; i < n; i++) {
       const a = angle + (i - (n - 1) / 2) * spread;
       this.playerBullets.push({
@@ -455,7 +541,7 @@ export class Game2D {
     if (boosting && !this.wasBoosting) this.runStats.boostsUsed++;
     this.wasBoosting = boosting;
     const fuelWasPositive = this.boostFuel > 0;
-    if (boosting) this.boostFuel = Math.max(0, this.boostFuel - CONFIG.boostDrain * dt);
+    if (boosting) this.boostFuel = Math.max(0, this.boostFuel - this.boostDrain * dt);
     else this.boostFuel = Math.min(this.boostFuelMax, this.boostFuel + CONFIG.boostRegen * dt);
     // T02: empty-fuel lockout (hysteresis) — boost stays off until fuel recovers,
     // so holding Shift at empty can't flap the fuel or spam sounds/counters
@@ -473,7 +559,7 @@ export class Game2D {
     }
 
     if (mag > 0) {
-      const acc = CONFIG.accel * (boosting ? CONFIG.boostMultiplier : 1);
+      const acc = this.playerAccel * (boosting ? this.boostMultiplier : 1);
       this.ship.vx += (ax / mag) * acc * dt;
       this.ship.vy += (ay / mag) * acc * dt;
       const back = Math.atan2(-this.ship.vy, -this.ship.vx);
@@ -616,7 +702,7 @@ export class Game2D {
       if (this.ship.invuln <= 0 && dist < CONFIG.shipHitRadius + e.r * 0.75) {
         this.killEnemy(e, i, true);
         if (this.shieldTime > 0) this.addShake(6);
-        else this.damagePlayer(CONFIG.contactDamage);
+        else this.damagePlayer(CONFIG.contactDamage * this.contactDamageMultiplier);
       }
     }
 
@@ -667,8 +753,8 @@ export class Game2D {
       p.life -= dt;
       const dx = this.ship.x - p.x, dy = this.ship.y - p.y;
       const d = Math.hypot(dx, dy);
-      if (d < CONFIG.pickupMagnet && d > 0.001) {
-        const pull = (1 - d / CONFIG.pickupMagnet) * 620;
+      if (d < this.pickupMagnet && d > 0.001) {
+        const pull = (1 - d / this.pickupMagnet) * 620;
         p.x += (dx / d) * pull * dt;
         p.y += (dy / d) * pull * dt;
       }

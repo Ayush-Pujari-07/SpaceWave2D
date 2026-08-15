@@ -80,22 +80,23 @@ export class UI {
     this.el.waveComplete.style.display = 'block';
     const container = this.el.upgrades;
     container.innerHTML = '';
-    // rarity-weighted random 3 options: common 60 / rare 30 / epic 12
+    // Rarity-weighted random choices, bounded by the number of eligible options.
+    const targetCount = Math.min(3, options.length);
     const weights = options.map(o => (o.rarity === 'epic' ? 12 : o.rarity === 'rare' ? 30 : 60));
     const totalW = weights.reduce((a, b) => a + b, 0);
     const chosen = [];
-    let guard = 0;
-    while (chosen.length < 3 && guard++ < 100) {
+    while (chosen.length < targetCount) {
       let r = Math.random() * totalW;
       let idx = options.length - 1;
       for (let i = 0; i < options.length; i++) { r -= weights[i]; if (r <= 0) { idx = i; break; } }
-      if (chosen.includes(options[idx])) continue;
-      chosen.push(options[idx]);
+      if (!chosen.includes(options[idx])) chosen.push(options[idx]);
     }
+    if (!chosen.length) container.textContent = 'No upgrades available this wave.';
     chosen.forEach(o => {
-      const card = document.createElement('div');
+      const card = document.createElement('button');
+      card.type = 'button';
       card.className = `card ${o.rarity}`;
-      card.innerHTML = `<div class="rarity">${o.rarity.toUpperCase()}</div><h3>${o.icon} ${o.name}</h3><p>${o.desc}</p>`;
+      card.innerHTML = `<div class="upgradeMeta"><span class="rarity">${o.rarity.toUpperCase()}</span><span class="role">${o.role}</span><span class="kind ${o.kind}">${o.kind.toUpperCase()}</span></div><h3>${o.icon} ${o.name}</h3><p>${o.description}</p>`;
       card.onclick = () => onPick(o);
       container.appendChild(card);
     });

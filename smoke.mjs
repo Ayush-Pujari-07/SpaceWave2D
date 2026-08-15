@@ -17,15 +17,16 @@ const ctxProxy = new Proxy({}, {
   },
   set() { return true; },
 });
-const elStub = () => ({
-  style: {}, textContent: '', innerHTML: '', className: '',
-  appendChild() {}, onclick: null, display: '',
+const elStub = (tagName = 'div') => ({
+  tagName, type: '', style: {}, textContent: '', innerHTML: '', className: '',
+  children: [], setAttribute() {}, addEventListener() {}, focus() {},
+  appendChild(child) { this.children.push(child); }, onclick: null, display: '',
 });
 globalThis.document = {
   getElementById: () => elStub(),
   createElement: tag => tag === 'canvas'
     ? { width: 0, height: 0, getContext: () => ctxProxy }
-    : elStub(),
+    : elStub(tag),
   hidden: false,
   addEventListener: () => {},
 };
@@ -130,6 +131,58 @@ game.boostFuel = 0; game.fuelState = 'empty'; game.boostLocked = false;
 game.spawnPickup(game.ship.x + 5, game.ship.y, 'fuel');
 frames(30);
 assert(game.boostFuel > 0 && game.boostFuel <= game.boostFuelMax, `fuel pickup restores fuel, capped at max (${game.boostFuel.toFixed(1)})`);
+
+// --- T03 invariant: typed upgrades apply to run state without mutating CONFIG ---
+const configBeforeUpgrades = JSON.stringify(CONFIG);
+game.selectedUpgradeIds = new Set();
+game.playerDamage = CONFIG.playerDamage;
+game.autoFireRate = CONFIG.autoFireRate;
+game.maxHealth = CONFIG.maxHealth;
+game.health = game.maxHealth;
+game.upgradeDefinitions = game.createUpgradeDefinitions();
+const hull = game.upgradeDefinitions.find(o => o.id === 'hull-reinforcement');
+const hullHealthBefore = game.maxHealth;
+hull.apply(game);
+game.selectedUpgradeIds.add(hull.id);
+assert(hull.role === 'Survival' && hull.kind === 'reward', 'pure upgrade exposes its role and reward kind');
+assert(game.maxHealth === hullHealthBefore + CONFIG.upgradeHullMaxHealth && game.health === game.maxHealth, 'hull reward increases and repairs max health');
+const cannon = game.createUpgradeDefinitions().find(o => o.id === 'heavy-cannon');
+const damageBeforeCannon = game.playerDamage;
+const fireIntervalBeforeCannon = game.autoFireRate;
+cannon.apply(game);
+assert(cannon.role === 'Precision' && cannon.kind === 'tradeoff', 'tradeoff exposes its role and tradeoff kind');
+assert(game.playerDamage > damageBeforeCannon && game.autoFireRate > fireIntervalBeforeCannon, 'Heavy Cannon trades slower firing for more damage');
+assert(JSON.stringify(CONFIG) === configBeforeUpgrades, 'upgrade application does not mutate CONFIG');
+
+// T03 UI matrix: three choices, keyboard-native buttons, and bounded limited choices.
+const uiOptions = game.createUpgradeDefinitions().filter(o => o.isEligible(game)).slice(0, 4);
+game.ui.el.upgrades.children.length = 0;
+game.ui.showWaveComplete(1, 4, uiOptions, () => {});
+assert(game.ui.el.upgrades.children.length === 3, 'upgrade UI shows exactly three choices when four are eligible');
+assert(game.ui.el.upgrades.children.every(card => card.tagName === 'button' && card.innerHTML.includes('upgradeMeta') && (card.innerHTML.includes('REWARD') || card.innerHTML.includes('TRADEOFF'))), 'upgrade cards are keyboard buttons with visible role/kind metadata');
+game.ui.el.upgrades.children.length = 0;
+let uiPicked = 0;
+game.ui.showWaveComplete(1, 4, uiOptions.slice(0, 1), () => { uiPicked++; });
+assert(game.ui.el.upgrades.children.length === 1, 'upgrade UI safely renders fewer than three choices');
+game.ui.el.upgrades.children[0].onclick();
+assert(uiPicked === 1, 'keyboard-native upgrade card invokes the selection callback');
+
+// Matrix coverage: a real choice advances once, and the same upgrade is then ineligible.
+game.state = 'playing';
+game.waveState = 'upgrade';
+game.upgradeChoiceResolved = false;
+game.upgradeDefinitions = game.createUpgradeDefinitions();
+const selectable = game.upgradeDefinitions.find(o => o.id === 'ion-reserve');
+const waveBeforeChoice = game.wave;
+game.selectUpgrade(selectable);
+game.selectUpgrade(selectable);
+assert(game.wave === waveBeforeChoice + 1 && game.selectedUpgradeIds.has(selectable.id), 'selecting an eligible upgrade applies it and advances exactly once');
+assert(!game.createUpgradeDefinitions().find(o => o.id === selectable.id).isEligible(game), 'selected upgrade is excluded from repeat choices');
+game.waveState = 'upgrade';
+game.upgradeChoiceResolved = false;
+const waveBeforeSkip = game.wave;
+game.skipUpgrade();
+assert(game.wave === waveBeforeSkip + 1, 'skip safely advances when a limited choice set is exhausted');
 
 // boss wave check (diagnostic only)
 if (game.state === 'playing') {
