@@ -355,10 +355,10 @@ export class Game2D {
       this.score += pts;
       this.addPopup(e.x, e.y, mult > 1 ? `+${pts} ×${mult}` : `+${pts}`);
     }
-    const dropChance = e.type === 'boss' ? 1 : 0.3;
+    const dropChance = e.type === 'boss' ? CONFIG.dropChanceBoss : CONFIG.dropChanceEnemy;
     if (Math.random() < dropChance) {
       this.spawnPickup(e.x, e.y, Math.random() < 0.35 ? 'shield' : 'health');
-      if (e.type === 'boss') this.spawnPickup(e.x + 34, e.y, 'health');
+      if (e.type === 'boss' && Math.random() < 0.5) this.spawnPickup(e.x + 34, e.y, 'health');
     }
     this.enemies.splice(i, 1);
   }

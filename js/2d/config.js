@@ -35,6 +35,8 @@ export const CONFIG = {
   // pickups
   pickupLife: 8,
   pickupMagnet: 130,
+  dropChanceEnemy: 0.18,   // was 0.3 — scarcer drops, healing is now a resource
+  dropChanceBoss: 0.8,     // was 1 — boss usually (not always) drops
   // fx
   particleCap: 320,
 };
