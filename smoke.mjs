@@ -47,7 +47,7 @@ const assert = (cond, message) => {
 const isFiniteNum = v => typeof v === 'number' && Number.isFinite(v);
 
 const { Game2D } = await import('./js/2d/game.js');
-const { CONFIG } = await import('./js/2d/config.js');
+const { CONFIG, WAVE_FAMILIES } = await import('./js/2d/config.js');
 const canvas = { width: 0, height: 0, style: {}, getContext: () => ctxProxy };
 const game = new Game2D(canvas);
 
@@ -238,6 +238,63 @@ game.startUpgradeScreen();
 let shieldedBonus = CONFIG.perfectClearBase + CONFIG.perfectClearPerWave * (waveT4b - 1);
 assert(game.score === scoreBeforeShielded + shieldedBonus, 'a wave with only shielded contact still earns the Perfect Clear bonus');
 assert(game.runStats.perfectWaves === perfectBeforeShielded + 1, 'Perfect Clear count increments for a shielded-only wave');
+
+// --- T05 invariant: wave families drive composition & cadence ---
+game.state = 'playing';
+game.waveState = 'playing';
+game.enemies.length = 0; game.pendingSpawns.length = 0;
+game.playerBullets.length = 0; game.enemyBullets.length = 0;
+game.pickups.length = 0;
+game.waveRemainingToSpawn = 0; game.waveSpawnComplete = false;
+// teaching wave: wave 1 is always the swarm family
+game.wave = 1;
+game.spawnWave();
+assert(game.waveFamily === 'swarm', 'wave 1 is always the swarm teaching family');
+// forced family (one-shot test hook): movement yields only fast pressure, within its timing range
+// (wave 6: movement-eligible and not a boss wave, so no Overlord in the pending list)
+game.wave = 6;
+game.forceWaveFamily = 'movement';
+game.pendingSpawns.length = 0;
+game.spawnWave();
+assert(game.waveFamily === 'movement', 'forced family is stored on the game');
+assert(game.forceWaveFamily === null, 'one-shot force hook clears after use');
+game.waveSpawnTimer = 0; // queue exactly one batch, deterministically
+frames(1);
+const moveTypes = new Set(game.pendingSpawns.map(p => p.type));
+assert(game.pendingSpawns.length > 0 && [...moveTypes].every(t => t === 'scout' || t === 'fighter'), `movement family spawns only fast pressure (got ${[...moveTypes].join(',') || 'none'})`);
+assert(game.waveSpawnTimer >= 0.6 && game.waveSpawnTimer <= 1.6, `next batch delay uses the family range (${game.waveSpawnTimer.toFixed(2)}s within [0.6, 1.6])`);
+// no consecutive family repeats when alternatives exist
+game.wave = 5;
+const famSeq = [];
+for (let i = 0; i < 20; i++) { game.spawnWave(); famSeq.push(game.waveFamily); }
+assert(famSeq.every((f, i) => i === 0 || f !== famSeq[i - 1]), `no family repeats back-to-back across 20 waves (${famSeq.join('>')})`);
+// boss wave keeps the Overlord spawn and still stores a family
+game.wave = 5;
+game.pendingSpawns.length = 0;
+game.spawnWave();
+assert(game.pendingSpawns.some(p => p.type === 'boss'), 'boss wave still schedules the Overlord');
+assert(game.waveFamily in WAVE_FAMILIES, 'boss wave still stores a valid family');
+// panic family: breathing interval after every breathEvery-th batch while enemies remain
+game.forceWaveFamily = 'panic';
+game.pendingSpawns.length = 0;
+game.spawnWave();
+game.waveBatchCount = 1;
+game.waveSpawnTimer = 0;
+frames(1);
+assert(game.waveBatchCount === 2 && game.waveSpawnTimer >= 2.5 && game.waveSpawnTimer <= 3.5, `panic breathing interval applied after 2nd batch (${game.waveSpawnTimer.toFixed(2)}s within [2.5, 3.5])`);
+// unknown weight keys are ignored (forward-compat for future enemy types)
+WAVE_FAMILIES.__test = { minWave: 1, weights: { ghost: 100, scout: 1 }, batch: [1, 1], delay: [0.1, 0.2] };
+game.forceWaveFamily = '__test';
+game.spawnWave();
+const unknownPicks = new Set();
+for (let i = 0; i < 50; i++) unknownPicks.add(game.weightedPick());
+delete WAVE_FAMILIES.__test;
+assert(unknownPicks.size === 1 && unknownPicks.has('scout'), 'unknown weight keys are ignored by weightedPick');
+// restore a clean playing state for later sections
+game.enemies.length = 0; game.pendingSpawns.length = 0;
+game.enemyBullets.length = 0; game.playerBullets.length = 0; game.pickups.length = 0;
+game.wave = 3; game.state = 'playing'; game.waveState = 'playing';
+game.waveRemainingToSpawn = 0; game.waveSpawnComplete = true;
 
 // boss wave check (diagnostic only)
 if (game.state === 'playing') {

@@ -72,6 +72,16 @@ export const ENEMY_TYPES = {
   boss:    { name: 'Overlord', color: '#f472b6', r: 52, speed: 40,  fireRate: 2.4, hpBase: 80, score: 2000, bulletSpeed: 280, bulletDmg: 8,  behavior: 'boss' },
 };
 
+// T05: wave families — each wave gets one family that drives enemy weights,
+// batch-size range, and spawn-delay range (per-second units).
+// minWave gates eligibility; weights may name types added later (ignored until defined).
+export const WAVE_FAMILIES = {
+  swarm:     { minWave: 1, weights: { scout: 60, fighter: 35, tank: 5,  sniper: 0  }, batch: [4, 10], delay: [0.8, 2.0] },
+  precision: { minWave: 3, weights: { scout: 10, fighter: 25, tank: 40, sniper: 25 }, batch: [2, 4],  delay: [1.5, 3.0] },
+  movement:  { minWave: 4, weights: { scout: 55, fighter: 45, tank: 0,  sniper: 0  }, batch: [4, 8],  delay: [0.6, 1.6] },
+  panic:     { minWave: 3, weights: { scout: 40, fighter: 30, tank: 15, sniper: 15 }, batch: [5, 9],  delay: [0.5, 1.2], breathEvery: 2, breathDelay: [2.5, 3.5] },
+};
+
 export const PICKUP_TYPES = {
   health: { color: '#22c55e' },
   shield: { color: '#60a5fa' },

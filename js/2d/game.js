@@ -1,4 +1,4 @@
-import { CONFIG, ENEMY_TYPES } from './config.js';
+import { CONFIG, ENEMY_TYPES, WAVE_FAMILIES } from './config.js';
 import { InputManager } from './input.js';
 import { UI } from './ui.js';
 import { Sfx } from './audio.js';
@@ -137,6 +137,11 @@ export class Game2D {
     this.comboTimer = 0;
     this.wave = 1;
     this.waveState = 'playing';
+    // T05: wave family identity (never revealed to the player before the wave)
+    this.waveFamily = null;
+    this.lastWaveFamily = null;
+    this.waveBatchCount = 0;
+    this.forceWaveFamily = null; // one-shot test hook, not a public API
     this.waveTotal = 0;
     this.waveRemainingToSpawn = 0;
     this.waveSpawnTimer = 0;
@@ -268,14 +273,34 @@ export class Game2D {
 
   // ---------- waves & spawning ----------
 
+  // T05: pick this wave's family — eligible by minWave, no consecutive repeat
+  // when at least two families are eligible. Wave 1 is always the teaching family.
+  chooseWaveFamily() {
+    const eligible = Object.keys(WAVE_FAMILIES).filter(k => WAVE_FAMILIES[k].minWave <= this.wave);
+    let pool = eligible.filter(k => k !== this.lastWaveFamily);
+    if (pool.length === 0) pool = eligible;
+    return pool[(Math.random() * pool.length) | 0];
+  }
+
   weightedPick() {
-    const w = this.wave;
-    const weights = {
-      scout: Math.min(70, 40 + w * 3),
-      fighter: 35,
-      tank: w >= 4 ? 12 + (w - 4) : 4,
-      sniper: w >= 3 ? 8 + (w - 3) * 2 : 0,
-    };
+    // T05: family weights drive composition; unknown keys (future types) are ignored.
+    const fam = WAVE_FAMILIES[this.waveFamily];
+    const weights = {};
+    if (fam) {
+      for (const k in fam.weights) {
+        if (ENEMY_TYPES[k] && fam.weights[k] > 0) weights[k] = fam.weights[k];
+      }
+    }
+    if (Object.keys(weights).length === 0) {
+      // Fallback: legacy wave-scaled table (defensive; family is always set by spawnWave)
+      const w = this.wave;
+      Object.assign(weights, {
+        scout: Math.min(70, 40 + w * 3),
+        fighter: 35,
+        tank: w >= 4 ? 12 + (w - 4) : 4,
+        sniper: w >= 3 ? 8 + (w - 3) * 2 : 0,
+      });
+    }
     const total = Object.values(weights).reduce((a, b) => a + b, 0);
     let r = Math.random() * total;
     for (const k in weights) { r -= weights[k]; if (r <= 0) return k; }
@@ -304,11 +329,16 @@ export class Game2D {
   }
 
   spawnWave() {
+    // T05: choose (or force, for tests) this wave's family before anything spawns
+    this.lastWaveFamily = this.waveFamily;
+    this.waveFamily = this.forceWaveFamily || this.chooseWaveFamily();
+    this.forceWaveFamily = null;
     this.waveTotal = CONFIG.waveEnemiesBase + (this.wave - 1) * CONFIG.waveEnemyGrowth;
     this.waveRemainingToSpawn = this.waveTotal;
     this.waveSpawnTimer = 0.3;
     this.waveSpawnComplete = false;
     this.waveSpawnedCount = 0;
+    this.waveBatchCount = 0;
     this.banner = { text: `WAVE ${this.wave}`, t: 2, color: '#7dd3fc' };
     if (this.wave % CONFIG.bossEvery === 0) {
       this.pendingSpawns.push({ x: this.W / 2, y: 70, t: 1.8, type: 'boss' });
@@ -523,21 +553,27 @@ export class Game2D {
       if (p.t <= 0) { this.pendingSpawns.splice(i, 1); this.materializeSpawn(p); }
     }
 
-    // --- batch wave spawning ---
+    // --- batch wave spawning (T05: family drives batch size, cadence, and breathing) ---
     if (this.waveRemainingToSpawn > 0) {
       this.waveSpawnTimer -= dt;
       if (this.waveSpawnTimer <= 0) {
+        const fam = WAVE_FAMILIES[this.waveFamily] || { batch: [CONFIG.spawnMinBatch, CONFIG.spawnMaxBatch], delay: [CONFIG.spawnMinDelay, CONFIG.spawnMaxDelay] };
         const remaining = this.waveRemainingToSpawn;
-        let batchSize;
-        if (remaining <= CONFIG.spawnMinBatch) batchSize = remaining;
-        else batchSize = CONFIG.spawnMinBatch + Math.floor(Math.random() * (Math.min(CONFIG.spawnMaxBatch, remaining) - CONFIG.spawnMinBatch + 1));
+        const bMin = Math.min(fam.batch[0], remaining);
+        const bMax = Math.min(fam.batch[1], remaining);
+        const batchSize = bMin + Math.floor(Math.random() * (bMax - bMin + 1));
         for (let i = 0; i < batchSize; i++) {
           const pos = this.pickSpawnPos();
           this.pendingSpawns.push({ ...pos, t: CONFIG.spawnWarnTime, type: this.weightedPick() });
         }
         this.waveRemainingToSpawn -= batchSize;
+        this.waveBatchCount++;
         if (this.waveRemainingToSpawn > 0) {
-          this.waveSpawnTimer = CONFIG.spawnMinDelay + Math.random() * (CONFIG.spawnMaxDelay - CONFIG.spawnMinDelay);
+          // Panic family takes a breathing interval after every breathEvery-th batch
+          let dMin, dMax;
+          if (fam.breathDelay && this.waveBatchCount % fam.breathEvery === 0) { dMin = fam.breathDelay[0]; dMax = fam.breathDelay[1]; }
+          else { dMin = fam.delay[0]; dMax = fam.delay[1]; }
+          this.waveSpawnTimer = dMin + Math.random() * (dMax - dMin);
         } else {
           this.waveSpawnComplete = true;
         }
