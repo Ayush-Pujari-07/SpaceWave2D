@@ -15,6 +15,7 @@ export class UI {
       boostState: document.getElementById('boostState'),
       waveComplete: document.getElementById('waveComplete'),
       waveInfo: document.getElementById('waveInfo'),
+      perfectClear: document.getElementById('perfectClear'),
       upgrades: document.getElementById('upgrades'),
       gameOver: document.getElementById('gameOver'),
       finalWave: document.getElementById('finalWave'),
@@ -75,8 +76,16 @@ export class UI {
       lbl.style.color = '';
     }
   }
-  showWaveComplete(wave, total, options, onPick) {
+  showWaveComplete(wave, total, options, onPick, perfect = false, perfectBonus = 0) {
     this.el.waveInfo.textContent = `Wave ${wave} cleared — ${total} enemies eliminated.`;
+    // T04: show the Perfect Clear bonus when earned, hide it otherwise
+    const pc = this.el.perfectClear;
+    if (perfect) {
+      pc.textContent = `★ PERFECT CLEAR ★  +${perfectBonus}`;
+      pc.style.display = 'block';
+    } else {
+      pc.style.display = 'none';
+    }
     this.el.waveComplete.style.display = 'block';
     const container = this.el.upgrades;
     container.innerHTML = '';

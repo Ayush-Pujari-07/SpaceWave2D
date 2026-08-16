@@ -340,11 +340,21 @@ export class Game2D {
   startUpgradeScreen() {
     this.waveState = 'upgrade';
     this.upgradeChoiceResolved = false;
+    // T04: Perfect Clear — the wave ended with zero unshielded hits (waveStats.hitsTaken).
+    // Shielded contact never reaches damagePlayer, so it does not invalidate the clear.
+    const perfect = this.waveStats.hitsTaken === 0;
+    let perfectBonus = 0;
+    if (perfect) {
+      perfectBonus = CONFIG.perfectClearBase + CONFIG.perfectClearPerWave * (this.wave - 1);
+      this.score += perfectBonus;
+      this.runStats.perfectWaves++;
+    }
     this.sfx.waveClear();
+    if (perfect) this.sfx.perfectClear();
     // Rebuild descriptions from current run values so displayed numbers stay truthful.
     this.upgradeDefinitions = this.createUpgradeDefinitions();
     const options = this.upgradeDefinitions.filter(o => o.isEligible(this));
-    this.ui.showWaveComplete(this.wave, this.waveTotal, options, o => this.selectUpgrade(o));
+    this.ui.showWaveComplete(this.wave, this.waveTotal, options, o => this.selectUpgrade(o), perfect, perfectBonus);
   }
 
   nextWave() {
@@ -806,7 +816,7 @@ export class Game2D {
       if (this.beams[i].life <= 0) this.beams.splice(i, 1);
     }
 
-    this.score += 2 * dt; // small survival drip (frame-rate independent)
+    // T04: no passive survival drip — score now comes from skill (kills, combos, Perfect Clears, pickups)
     if (this.shake > 0) this.shake = Math.max(0, this.shake - 40 * dt);
 
     // T01: track the highest displayed combo multiplier this run

@@ -184,6 +184,61 @@ const waveBeforeSkip = game.wave;
 game.skipUpgrade();
 assert(game.wave === waveBeforeSkip + 1, 'skip safely advances when a limited choice set is exhausted');
 
+// --- T04 invariant: skill-based scoring & Perfect Clears ---
+// Helper: drive the game to a clean, controlled end-of-wave state so startUpgradeScreen can be exercised deterministically.
+const resetForClear = () => {
+  game.state = 'playing';
+  game.waveState = 'playing';
+  game.enemies.length = 0;
+  game.pendingSpawns.length = 0;
+  game.playerBullets.length = 0;
+  game.enemyBullets.length = 0;
+  game.pickups.length = 0;
+  game.waveRemainingToSpawn = 0;
+  game.waveSpawnComplete = true;
+  game.waveStats.hitsTaken = 0;
+  game.waveStats.enemiesKilled = 0;
+};
+// eligible: a no-hit wave awards exactly one Perfect Clear bonus
+resetForClear();
+let waveT4 = 3;
+let scoreBeforeClear = game.score;
+let perfectBeforeClear = game.runStats.perfectWaves;
+game.wave = waveT4;
+game.startUpgradeScreen();
+let expectedBonus = CONFIG.perfectClearBase + CONFIG.perfectClearPerWave * (waveT4 - 1);
+assert(game.score === scoreBeforeClear + expectedBonus, `no-hit wave awards exactly one Perfect Clear bonus (+${expectedBonus})`);
+assert(game.runStats.perfectWaves === perfectBeforeClear + 1, 'Perfect Clear count increments for a no-hit wave');
+// ineligible: a wave with one unshielded hit receives no bonus
+resetForClear();
+game.wave = waveT4;
+game.waveStats.hitsTaken = 1;
+let scoreBeforeHit = game.score;
+let perfectBeforeHit = game.runStats.perfectWaves;
+game.startUpgradeScreen();
+assert(game.score === scoreBeforeHit, 'a wave with one unshielded hit awards no Perfect Clear bonus');
+assert(game.runStats.perfectWaves === perfectBeforeHit, 'Perfect Clear count unchanged after a hit wave');
+// shielded projectile contact does not invalidate Perfect Clear (no damage taken => hitsTaken stays 0)
+resetForClear();
+let waveT4b = 2;
+game.wave = waveT4b;
+game.waveSpawnComplete = false; // keep this isolated step from auto-completing the wave
+game.ship.invuln = 0;
+game.shieldTime = 5;
+game.enemyBullets.length = 0;
+game.enemyBullets.push({ x: game.ship.x, y: game.ship.y, vx: 0, vy: 0, life: 2, color: '#fff', type: 'fighter', dmg: 10 });
+let shieldHitsBefore = game.waveStats.hitsTaken;
+let scoreBeforeShielded = game.score;
+frames(1);
+assert(game.waveStats.hitsTaken === shieldHitsBefore, 'shielded projectile contact does not count as a hit (Perfect Clear stays valid)');
+// the same shielded wave, when cleared, still earns its bonus
+let perfectBeforeShielded = game.runStats.perfectWaves;
+game.waveSpawnComplete = true;
+game.startUpgradeScreen();
+let shieldedBonus = CONFIG.perfectClearBase + CONFIG.perfectClearPerWave * (waveT4b - 1);
+assert(game.score === scoreBeforeShielded + shieldedBonus, 'a wave with only shielded contact still earns the Perfect Clear bonus');
+assert(game.runStats.perfectWaves === perfectBeforeShielded + 1, 'Perfect Clear count increments for a shielded-only wave');
+
 // boss wave check (diagnostic only)
 if (game.state === 'playing') {
   game.wave = 5;
@@ -214,10 +269,11 @@ console.log('after R: state =', game.state, '| wave =', game.wave, '| health =',
 assert(game.state === 'playing', 'restart returns to playing state');
 assert(game.wave === 1, 'restart resets wave to 1');
 assert(game.health === game.maxHealth && game.maxHealth === 100, 'restart restores full health');
-assert(game.score < 1, 'restart resets score (only survival drip accumulates after)');
+assert(game.score < 1, 'restart resets score (no passive survival drip)');
 assert(game.enemies.length === 0 && game.pendingSpawns.length === 0, 'restart clears enemies and pending spawns');
 // --- T01 invariant: restart resets all run metrics ---
 assert(game.runStats.enemiesKilled === 0 && game.runStats.hitsTaken === 0 && game.runStats.pickupsCollected === 0 && game.runStats.elapsed < 1, 'restart resets all run metrics');
+assert(game.runStats.perfectWaves === 0, 'restart resets the Perfect Clear count');
 assert(game.waveStats.enemiesKilled === 0 && game.waveStats.hitsTaken === 0, 'restart resets wave metrics');
 
 // pause toggle via P (diagnostic only)

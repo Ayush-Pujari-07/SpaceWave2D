@@ -57,6 +57,9 @@ export const CONFIG = {
   fuelLowThreshold: 0.25,  // fraction of boostFuelMax that flags "low fuel"
   fuelRecoverRatio: 0.2,   // fraction of boostFuelMax fuel must recover to before boost re-engages after empty
   fuelDropChance: 0.12,    // chance a defeated (non-boss) enemy also drops a fuel pickup
+  // T04: skill-based scoring — Perfect Clear bonus (no passive survival drip)
+  perfectClearBase: 250,     // base bonus for ending a wave with zero unshielded hits
+  perfectClearPerWave: 100,  // added for each wave number above wave 1
   // fx
   particleCap: 320,
 };

@@ -73,6 +73,8 @@ export class Sfx {
     this.tone({ type: 'sawtooth', f0: 160, f1: 60, dur: 0.25, vol: 0.25 });
   }
   waveClear() { [523, 659, 784, 1047].forEach((f, i) => this.tone({ f0: f, dur: 0.15, vol: 0.14, delay: i * 0.09 })); }
+  // T04: brighter, higher triangle arpeggio — distinct from the sine waveClear
+  perfectClear() { [880, 1108.7, 1318.5, 1760].forEach((f, i) => this.tone({ type: 'triangle', f0: f, dur: 0.13, vol: 0.16, delay: i * 0.08 })); }
   bossWarning() {
     this.tone({ type: 'sawtooth', f0: 110, dur: 0.4, vol: 0.18 });
     this.tone({ type: 'sawtooth', f0: 110, dur: 0.4, vol: 0.18, delay: 0.5 });
