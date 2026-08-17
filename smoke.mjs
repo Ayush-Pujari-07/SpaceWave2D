@@ -264,6 +264,18 @@ frames(1);
 const moveTypes = new Set(game.pendingSpawns.map(p => p.type));
 assert(game.pendingSpawns.length > 0 && [...moveTypes].every(t => t === 'scout' || t === 'fighter' || t === 'blocker'), `movement family spawns only fast pressure + Blocker (got ${[...moveTypes].join(',') || 'none'})`);
 assert(game.waveSpawnTimer >= 0.6 && game.waveSpawnTimer <= 1.6, `next batch delay uses the family range (${game.waveSpawnTimer.toFixed(2)}s within [0.6, 1.6])`);
+// T10: precision family — deterministic check at wave 4 (eligible, not boss)
+game.wave = 4;
+game.forceWaveFamily = 'precision';
+game.pendingSpawns.length = 0;
+game.spawnWave();
+assert(game.waveFamily === 'precision', 'forced precision family is stored on the game');
+assert(game.forceWaveFamily === null, 'precision one-shot force hook clears after use');
+game.waveSpawnTimer = 0;
+frames(1);
+const precTypes = new Set(game.pendingSpawns.map(p => p.type));
+assert(game.pendingSpawns.length > 0 && [...precTypes].every(t => t === 'scout' || t === 'fighter' || t === 'tank' || t === 'sniper'), `precision family spawns only types weighted in that family (got ${[...precTypes].join(',') || 'none'})`);
+assert(game.waveSpawnTimer >= 1.5 && game.waveSpawnTimer <= 3.0, `precision batch delay uses the family range (${game.waveSpawnTimer.toFixed(2)}s within [1.5, 3.0])`);
 // no consecutive family repeats when alternatives exist
 game.wave = 5;
 const famSeq = [];
