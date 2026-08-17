@@ -149,6 +149,7 @@ export class Game2D {
     this.waveSpawnedCount = 0;
     this.time = 0;
     this.lastShot = -9;
+    this.lastHealSfxAt = -9; // T07: heal-sound throttle
     this.shake = 0;
     this.banner = null;
     this.ship = { x: this.W / 2, y: this.H / 2, vx: 0, vy: 0, angle: 0, invuln: 0 };
@@ -248,9 +249,9 @@ export class Game2D {
       },
       {
         id: 'blood-shield', icon: '🩸', name: 'Blood Shield', rarity: 'epic', role: 'Risk', kind: 'tradeoff',
-        description: 'Reserved for a future risky sustain mutation',
-        isEligible: () => false,
-        apply: () => {},
+        description: `Kills restore ${f(CONFIG.bloodShieldHeal)} HP (boss ×${f(CONFIG.bloodShieldBossMultiplier)}); max health -${f((1 - CONFIG.bloodShieldMaxHealthMultiplier) * 100)}%`,
+        isEligible: once('blood-shield'),
+        apply: game => { game.maxHealth = Math.round(game.maxHealth * CONFIG.bloodShieldMaxHealthMultiplier); game.health = Math.min(game.health, game.maxHealth); },
       },
     ];
   }
@@ -523,6 +524,20 @@ export class Game2D {
       const pts = Math.floor(t.score * mult);
       this.score += pts;
       this.addPopup(e.x, e.y, mult > 1 ? `+${pts} ×${mult}` : `+${pts}`);
+      // T07: Blood Shield — player-caused kills restore HP; contact kills never heal
+      if (this.selectedUpgradeIds.has('blood-shield') && this.health < this.maxHealth) {
+        const heal = Math.floor(CONFIG.bloodShieldHeal * (e.type === 'boss' ? CONFIG.bloodShieldBossMultiplier : 1));
+        const before = this.health;
+        this.health = Math.min(this.maxHealth, this.health + heal);
+        const gained = Math.floor(this.health - before);
+        if (gained > 0) {
+          this.addPopup(this.ship.x, this.ship.y - 26, `+${gained} HP`, '#22d3ee');
+          if (this.time - this.lastHealSfxAt >= CONFIG.bloodShieldSfxInterval) {
+            this.lastHealSfxAt = this.time;
+            this.sfx.heal();
+          }
+        }
+      }
     }
     const dropChance = e.type === 'boss' ? CONFIG.dropChanceBoss : CONFIG.dropChanceEnemy;
     if (Math.random() < dropChance) {

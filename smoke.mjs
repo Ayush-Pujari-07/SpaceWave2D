@@ -364,6 +364,84 @@ game.enemyBullets.length = 0; game.playerBullets.length = 0; game.pickups.length
 game.wave = 3; game.state = 'playing'; game.waveState = 'playing';
 game.waveRemainingToSpawn = 0; game.waveSpawnComplete = true;
 
+// --- T07 invariant: Blood Shield — kill restore, cap, contact exclusion, one-time, throttled sfx ---
+game.state = 'playing';
+game.waveState = 'playing';
+game.enemies.length = 0; game.pendingSpawns.length = 0;
+game.playerBullets.length = 0; game.enemyBullets.length = 0; game.pickups.length = 0;
+game.waveRemainingToSpawn = 0; game.waveSpawnComplete = true;
+// SELECT: card states restore + max-health downside; selecting cuts max health and clamps
+game.wave = 3;
+const bs = game.upgradeDefinitions.find(o => o.id === 'blood-shield');
+assert(bs.role === 'Risk' && bs.kind === 'tradeoff' && bs.rarity === 'epic', 'Blood Shield is an epic Risk tradeoff');
+assert(bs.description.includes(`${CONFIG.bloodShieldHeal} HP`) && bs.description.includes('20%'), `card states restore and max-health downside (${bs.description})`);
+assert(bs.isEligible(game), 'Blood Shield is eligible before selection');
+game.waveState = 'upgrade';
+const bsMaxBefore = game.maxHealth;
+const bsWaveBefore = game.wave;
+game.selectUpgrade(bs);
+assert(game.maxHealth === Math.round(bsMaxBefore * CONFIG.bloodShieldMaxHealthMultiplier), `selection cuts max health by ${Math.round((1 - CONFIG.bloodShieldMaxHealthMultiplier) * 100)}% (${bsMaxBefore} -> ${game.maxHealth})`);
+assert(game.health <= game.maxHealth, 'health clamped to the new max on selection');
+assert(game.selectedUpgradeIds.has('blood-shield'), 'selection recorded in selectedUpgradeIds');
+assert(game.wave === bsWaveBefore + 1, 'selection advances the wave exactly once');
+// ONCE: excluded from future options
+assert(!game.createUpgradeDefinitions().find(o => o.id === 'blood-shield').isEligible(game), 'selected Blood Shield is excluded from repeat choices');
+// KILL_HEAL: player-caused kill restores the configured amount, with a cyan popup + one sound
+game.waveState = 'playing';
+game.enemies.length = 0; game.pickups.length = 0;
+let healSfx = 0;
+const origHeal = game.sfx.heal;
+game.sfx.heal = () => { healSfx++; };
+const spawnAt = type => game.materializeSpawn({ x: game.ship.x + 400, y: game.ship.y - 400, t: 0, type });
+game.health = 10;
+spawnAt('scout');
+game.killEnemy(game.enemies[0], 0, false);
+assert(game.health === 10 + CONFIG.bloodShieldHeal, `player-caused kill restores ${CONFIG.bloodShieldHeal} HP (10 -> ${game.health})`);
+const healPopup = game.popups[game.popups.length - 1];
+assert(healPopup.text === `+${CONFIG.bloodShieldHeal} HP` && healPopup.color === '#22d3ee', 'heal popup shows the gained HP in cyan');
+assert(healSfx === 1, 'heal sound plays for a successful restore');
+// SFX_THROTTLE: a second kill at the same game time adds no sound; after the interval it resumes
+game.health = 10;
+spawnAt('scout');
+game.killEnemy(game.enemies[0], 0, false);
+assert(healSfx === 1, 'rapid second kill does not spam the heal sound');
+game.time += CONFIG.bloodShieldSfxInterval + 0.1;
+game.health = 10;
+spawnAt('scout');
+game.killEnemy(game.enemies[0], 0, false);
+assert(healSfx === 2, 'heal sound resumes after the throttle interval');
+// CONTACT_KILL: contact-destroyed enemies restore nothing and show no heal popup
+game.health = 20;
+const popupsBeforeContact = game.popups.length;
+spawnAt('scout');
+game.killEnemy(game.enemies[0], 0, true);
+assert(game.health === 20, 'contact-destroyed enemy restores nothing');
+assert(!game.popups.slice(popupsBeforeContact).some(p => p.color === '#22d3ee'), 'contact kill shows no heal popup');
+// CAP: healing never exceeds max health
+game.health = game.maxHealth - 1;
+spawnAt('scout');
+game.killEnemy(game.enemies[0], 0, false);
+assert(game.health === game.maxHealth, `heal caps at max health (${game.health})`);
+// FULL_HP: at full HP nothing is restored and no heal popup/sound occurs
+game.health = game.maxHealth;
+const sfxAtFull = healSfx;
+const popupsAtFull = game.popups.length;
+spawnAt('scout');
+game.killEnemy(game.enemies[0], 0, false);
+assert(game.health === game.maxHealth, 'full-HP kill leaves health unchanged');
+assert(healSfx === sfxAtFull && !game.popups.slice(popupsAtFull).some(p => p.color === '#22d3ee'), 'full-HP kill plays no heal sound and shows no heal popup');
+// BOSS: boss kill grants the multiplied amount
+game.health = 10;
+spawnAt('boss');
+game.killEnemy(game.enemies[0], 0, false);
+assert(game.health === 10 + Math.floor(CONFIG.bloodShieldHeal * CONFIG.bloodShieldBossMultiplier), `boss kill restores the multiplied amount (10 -> ${game.health})`);
+game.sfx.heal = origHeal;
+// restore a clean playing state for later sections
+game.enemies.length = 0; game.pendingSpawns.length = 0;
+game.enemyBullets.length = 0; game.playerBullets.length = 0; game.pickups.length = 0;
+game.wave = 3; game.state = 'playing'; game.waveState = 'playing';
+game.waveRemainingToSpawn = 0; game.waveSpawnComplete = true;
+
 // boss wave check (diagnostic only)
 if (game.state === 'playing') {
   game.wave = 5;

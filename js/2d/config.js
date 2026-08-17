@@ -32,6 +32,11 @@ export const CONFIG = {
   heavyPlatingMaxHealth: 30,
   heavyPlatingContactDamageMultiplier: 0.75,
   heavyPlatingAccelMultiplier: 0.8,
+  // T07: Blood Shield — risky sustain mutation (kill restore, max-health cut)
+  bloodShieldHeal: 4,                    // HP restored per player-caused kill (capped at maxHealth)
+  bloodShieldBossMultiplier: 3,          // boss kills restore heal × this
+  bloodShieldMaxHealthMultiplier: 0.8,   // downside: max health × this when selected
+  bloodShieldSfxInterval: 0.3,           // min seconds between heal sounds
   // waves
   waveEnemiesBase: 6,
   waveEnemyGrowth: 3,
