@@ -34,6 +34,7 @@ const store = {};
 globalThis.localStorage = {
   getItem: k => (k in store ? store[k] : null),
   setItem: (k, v) => { store[k] = String(v); },
+  removeItem: k => { delete store[k]; },
 };
 
 // ---- tiny assertion helper (T00): failures exit non-zero ----
@@ -557,6 +558,122 @@ assert(game.runStats.enemiesKilled === 0 && game.runStats.hitsTaken === 0 && gam
 assert(game.runStats.perfectWaves === 0, 'restart resets the Perfect Clear count');
 assert(game.waveStats.enemiesKilled === 0 && game.waveStats.hitsTaken === 0, 'restart resets wave metrics');
 
+// --- T09 invariant: learn-by-playing hints — persistence, FIFO queueing, demonstration gating, reset ---
+// helpers: a controlled playing world + a fresh hint profile
+const t09World = () => {
+  game.state = 'playing';
+  game.waveState = 'playing';
+  game.enemies.length = 0; game.pendingSpawns.length = 0;
+  game.playerBullets.length = 0; game.enemyBullets.length = 0; game.pickups.length = 0;
+  game.waveRemainingToSpawn = 0; game.waveSpawnComplete = true;
+  game.ship.invuln = 0;
+};
+const t09FreshHints = () => {
+  delete store.sw2d_hints;
+  game.hintDone = game.loadHintDone();
+  game.hint = null; game.hintQueue = [];
+  game.ui.hideHint();
+};
+// NEW_PROFILE: fresh profile → startGame shows the movement hint
+t09FreshHints();
+game.startGame();
+assert(game.hint && game.hint.id === 'move', 'new profile: movement hint is active at start');
+assert(game.ui.el.hint.style.display === 'block' && game.ui.el.hint.textContent === 'Move with WASD or Arrow Keys', 'new profile: movement hint text is visible');
+// MOVE_DEMO: first movement completes move (persisted) and shows the boost hint
+press('KeyD');
+frames(1);
+release('KeyD');
+assert(game.hintDone.has('move') && store.sw2d_hints.includes('move'), 'first move input completes and persists the move hint');
+assert(game.hint && game.hint.id === 'boost' && game.ui.el.hint.textContent === 'Hold Shift to boost — boost uses fuel', 'first move input shows the boost hint');
+// BOOST_DEMO: first successful boost completes boost (persisted) and hides the hint
+press('ShiftLeft');
+frames(1);
+release('ShiftLeft');
+assert(game.hintDone.has('boost') && store.sw2d_hints.includes('boost'), 'first successful boost completes and persists the boost hint');
+assert(game.hint === null && game.ui.el.hint.style.display === 'none', 'boost hint hidden after demonstration');
+// EMPTY_FUEL: first empty-fuel transition shows the hint and marks it done
+game.boostFuel = 1; game.fuelState = 'normal'; game.boostLocked = false;
+press('ShiftLeft');
+frames(40);
+release('ShiftLeft');
+assert(game.hint && game.hint.id === 'emptyFuel', 'first empty-fuel transition shows the emptyFuel hint');
+assert(game.hintDone.has('emptyFuel') && store.sw2d_hints.includes('emptyFuel'), 'emptyFuel hint marked done and persisted (once per profile)');
+// QUEUE: a trigger while a hint is active queues FIFO and shows after the active hint ends
+t09FreshHints();
+game.startGame();
+game.pendingSpawns.push({ x: game.ship.x + 300, y: game.ship.y, t: 1, type: 'scout' });
+frames(1);
+assert(game.hint && game.hint.id === 'move', 'active hint stays active when a new trigger fires');
+assert(game.hintQueue.length === 1 && game.hintQueue[0] === 'spawnWarn', 'new trigger queues behind the active hint (FIFO)');
+press('KeyD');
+frames(1);
+release('KeyD');
+assert(game.hint && game.hint.id === 'spawnWarn', 'queued hint shows after the active hint completes');
+// SPAWN_WARN: first visible spawn warning shows + marks done when nothing is active
+t09FreshHints();
+t09World();
+game.pendingSpawns.push({ x: game.ship.x + 300, y: game.ship.y, t: 1, type: 'scout' });
+frames(1);
+assert(game.hint && game.hint.id === 'spawnWarn', 'first spawn warning shows the spawnWarn hint when nothing is active');
+assert(game.hintDone.has('spawnWarn'), 'spawnWarn marked done on first occurrence');
+// UPGRADE: first upgrade screen shows the upgrade hint + marks done
+t09FreshHints();
+t09World();
+game.startUpgradeScreen();
+assert(game.hint && game.hint.id === 'upgrade', 'first upgrade screen shows the upgrade hint');
+assert(game.hintDone.has('upgrade'), 'upgrade hint marked done on first occurrence');
+game.waveState = 'playing';
+// RETURNING: all five completed → startGame shows no hint
+store.sw2d_hints = JSON.stringify({ move: true, boost: true, emptyFuel: true, spawnWarn: true, upgrade: true });
+game.hintDone = game.loadHintDone();
+game.startGame();
+assert(game.hint === null && game.hintQueue.length === 0, 'returning profile: no hint at start');
+assert(game.ui.el.hint.style.display === 'none', 'returning profile: hint element stays hidden');
+// CORRUPT: invalid JSON is treated as a new profile (no crash)
+store.sw2d_hints = 'not-json';
+const corruptHints = game.loadHintDone();
+assert(corruptHints instanceof Set && corruptHints.size === 0, 'corrupt sw2d_hints parses to an empty set');
+// RESET: start-screen reset button clears persistence and active/queued hints
+store.sw2d_hints = JSON.stringify({ move: true });
+game.hintDone = new Set(['move']);
+game.hint = { id: 'move', t: 3 };
+game.hintQueue = ['boost'];
+game.ui.el.hint.style.display = 'block';
+game.ui.el.resetHints.onclick();
+assert(!('sw2d_hints' in store), 'reset removes the sw2d_hints key');
+assert(game.hintDone.size === 0 && game.hint === null && game.hintQueue.length === 0, 'reset clears in-memory hint state');
+assert(game.ui.el.hint.style.display === 'none', 'reset hides the active hint');
+game.startGame();
+assert(game.hint && game.hint.id === 'move', 'hints re-appear after reset on the next start');
+// SHIELD_ABSORB: shielded bullet plays the absorb sfx — no playerHit, no damage
+t09World();
+game.shieldTime = 5;
+game.ship.invuln = 0;
+game.health = game.maxHealth;
+game.enemyBullets.length = 0;
+game.enemyBullets.push({ x: game.ship.x, y: game.ship.y, vx: 0, vy: 0, life: 2, color: '#fff', type: 'fighter', dmg: 10 });
+let absorbSfx = 0, hitSfx = 0;
+const origAbsorb = game.sfx.shieldAbsorb, origHit = game.sfx.playerHit;
+game.sfx.shieldAbsorb = () => { absorbSfx++; };
+game.sfx.playerHit = () => { hitSfx++; };
+frames(1);
+game.sfx.shieldAbsorb = origAbsorb;
+game.sfx.playerHit = origHit;
+assert(absorbSfx === 1, 'shielded bullet absorption plays the absorb sfx exactly once');
+assert(hitSfx === 0, 'shielded bullet plays no player-hit sfx');
+assert(game.health === game.maxHealth, 'shielded bullet deals no damage');
+// clean state for the remaining diagnostics
+release('KeyD'); release('ShiftLeft');
+game.startGame();
+
+const origStep = game.step.bind(game);
+let dbgN = 0;
+game.step = function(dt) {
+  const before = this.state;
+  origStep(dt);
+  if (dbgN < 14) console.log('DEBUG step: ' + before + ' -> ' + this.state + ' | pressed=' + JSON.stringify([...this.input.pressed]));
+  dbgN++;
+};
 // pause toggle via P (diagnostic only)
 press('KeyP'); frames(2); release('KeyP');
 console.log('after P: state =', game.state);

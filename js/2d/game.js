@@ -6,6 +6,15 @@ import { buildSprites } from './sprites.js';
 
 const STEP = 1 / 60; // fixed timestep: identical speed on 60/120/144Hz displays
 
+// T09: learn-by-playing hints — verbatim texts, one per mechanic (death gets no hint)
+const HINT_TEXTS = {
+  move: 'Move with WASD or Arrow Keys',
+  boost: 'Hold Shift to boost — boost uses fuel',
+  emptyFuel: 'Boost unavailable at empty fuel; keep moving normally or collect fuel',
+  spawnWarn: 'Warnings show where enemies will arrive',
+  upgrade: 'Role tags show what each upgrade is best at; major upgrades have tradeoffs',
+};
+
 export class Game2D {
   constructor(canvas) {
     this.canvas = canvas;
@@ -16,6 +25,7 @@ export class Game2D {
     this.sprites = buildSprites();
     this.dpr = 1;
     this.best = +(localStorage.getItem('sw2d_best') || 0);
+    this.hintDone = this.loadHintDone(); // T09: profile-level completed hints (persisted)
     this.state = 'menu';
 
     this.resize();
@@ -29,6 +39,7 @@ export class Game2D {
     this.ui.el.nextWave.onclick = () => { this.sfx.ui(); this.skipUpgrade(); };
     this.ui.el.restart.onclick = () => { this.sfx.ui(); this.startGame(); };
     this.ui.el.pauseRestart.onclick = () => { this.sfx.ui(); this.startGame(); };
+    this.ui.el.resetHints.onclick = () => { this.sfx.ui(); this.resetHints(); };
 
     this.lastT = performance.now();
     this.acc = 0;
@@ -88,6 +99,7 @@ export class Game2D {
   startGame() {
     this.resetState();
     this.state = 'playing';
+    this.queueHint('move'); // T09: onboarding starts with movement (no-op if already demonstrated)
     this.spawnWave();
     this.ui.hideStart();
     this.ui.hidePause();
@@ -179,6 +191,9 @@ export class Game2D {
     };
     this.resetWaveStats();
     this.lastDamage = null; // T08: final-hit context for the Run Debrief
+    this.hint = null; // T09: active hint {id, t} or null
+    this.hintQueue = []; // T09: FIFO of queued hint ids
+    this.ui.hideHint(); // T09: a new run never inherits the previous run's toast
   }
 
   resetWaveStats() {
@@ -382,6 +397,8 @@ export class Game2D {
   startUpgradeScreen() {
     this.waveState = 'upgrade';
     this.upgradeChoiceResolved = false;
+    // T09: first upgrade screen → teach the role tags (once per profile)
+    if (!this.hintDone.has('upgrade')) { this.queueHint('upgrade'); this.markHintDone('upgrade'); }
     // T04: Perfect Clear — the wave ended with zero unshielded hits (waveStats.hitsTaken).
     // Shielded contact never reaches damagePlayer, so it does not invalidate the clear.
     const perfect = this.waveStats.hitsTaken === 0;
@@ -419,6 +436,10 @@ export class Game2D {
 
   gameOver() {
     this.state = 'gameover';
+    // T09: death gets no hint (Run Debrief covers it) — hide + clear without marking completion
+    this.ui.hideHint();
+    this.hint = null;
+    this.hintQueue = [];
     this.addShake(20);
     this.sfx.explosion(true);
     this.addExplosion(this.ship.x, this.ship.y, '#7dd3fc', 60);
@@ -520,6 +541,70 @@ export class Game2D {
       highestCombo: rs.highestCombo ?? 1,
       perfects: rs.perfectWaves ?? 0,
     };
+  }
+
+  // ---------- T09: learn-by-playing hints (DOM toast + sfx; never touches simulation) ----------
+
+  loadHintDone() {
+    try {
+      const raw = localStorage.getItem('sw2d_hints');
+      const obj = raw ? JSON.parse(raw) : {};
+      return new Set(Object.keys(obj));
+    } catch {
+      return new Set(); // corrupt JSON → treat as a new profile
+    }
+  }
+
+  saveHintDone() {
+    const obj = {};
+    for (const id of this.hintDone) obj[id] = true;
+    localStorage.setItem('sw2d_hints', JSON.stringify(obj));
+  }
+
+  resetHints() {
+    localStorage.removeItem('sw2d_hints');
+    this.hintDone = new Set();
+    this.ui.hideHint();
+    this.hint = null;
+    this.hintQueue = [];
+  }
+
+  markHintDone(id) {
+    if (this.hintDone.has(id)) return;
+    this.hintDone.add(id);
+    this.saveHintDone();
+  }
+
+  completeHint(id) {
+    this.markHintDone(id);
+    this.hintQueue = this.hintQueue.filter(h => h !== id);
+    if (this.hint && this.hint.id === id) this.endHint();
+  }
+
+  queueHint(id) {
+    if (this.hintDone.has(id) || this.hintQueue.includes(id)) return;
+    if (this.hint && this.hint.id === id) return;
+    if (!this.hint) this.startHint(id);
+    else this.hintQueue.push(id);
+  }
+
+  startHint(id) {
+    this.hint = { id, t: CONFIG.hintDurations[id] };
+    this.ui.showHint(HINT_TEXTS[id]);
+    this.sfx.hint();
+  }
+
+  endHint() {
+    this.hint = null;
+    this.ui.hideHint();
+    const next = this.hintQueue.shift();
+    if (next) this.startHint(next);
+  }
+
+  updateHint(dt) {
+    if (!this.hint) return;
+    this.hint.t -= dt;
+    if (this.hint.t <= 0) this.endHint();
   }
 
   // ---------- fx helpers ----------
@@ -671,6 +756,8 @@ export class Game2D {
     this.updateBackground(dt);
     if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
 
+    if (this.state === 'playing') this.updateHint(dt); // T09: hint countdown (DOM/sfx only)
+
     if (this.state !== 'playing' || this.waveState !== 'playing') return;
 
     // T01: run time counts only while actively playing a wave
@@ -681,6 +768,11 @@ export class Game2D {
       const p = this.pendingSpawns[i];
       p.t -= dt;
       if (p.t <= 0) { this.pendingSpawns.splice(i, 1); this.materializeSpawn(p); }
+    }
+    // T09: first visible spawn warning → teach the markers (once per profile)
+    if (this.pendingSpawns.length > 0 && !this.hintDone.has('spawnWarn')) {
+      this.queueHint('spawnWarn');
+      this.markHintDone('spawnWarn');
     }
 
     // --- batch wave spawning (T05: family drives batch size, cadence, and breathing) ---
@@ -714,6 +806,12 @@ export class Game2D {
     const { ax, ay } = this.input.getMoveAxis();
     const mag = Math.hypot(ax, ay);
     const boosting = this.input.isBoosting() && this.boostFuel > 0 && !this.boostLocked;
+    // T09: demonstration-gated hints — per-action guards so incomplete hints re-appear on later runs
+    if (mag > 0) {
+      if (!this.hintDone.has('move')) this.completeHint('move');
+      if (!this.hintDone.has('boost')) this.queueHint('boost');
+    }
+    if (boosting && !this.hintDone.has('boost')) this.completeHint('boost');
     if (boosting && !this.wasBoosting) this.runStats.boostsUsed++;
     this.wasBoosting = boosting;
     const fuelWasPositive = this.boostFuel > 0;
@@ -728,8 +826,11 @@ export class Game2D {
       const ratio = this.boostFuel / this.boostFuelMax;
       const ns = this.boostFuel <= 0 ? 'empty' : ratio < CONFIG.fuelLowThreshold ? 'low' : 'normal';
       if (ns !== this.fuelState) {
-        if (ns === 'empty') this.sfx.fuelEmpty();
-        else if (ns === 'low' && this.fuelState === 'normal') this.sfx.fuelLow();
+        if (ns === 'empty') {
+          this.sfx.fuelEmpty();
+          // T09: first empty-fuel transition → teach it (once per profile)
+          if (!this.hintDone.has('emptyFuel')) { this.queueHint('emptyFuel'); this.markHintDone('emptyFuel'); }
+        } else if (ns === 'low' && this.fuelState === 'normal') this.sfx.fuelLow();
         this.fuelState = ns;
       }
     }
@@ -932,6 +1033,7 @@ export class Game2D {
         if (this.shieldTime > 0) {
           this.addShake(5);
           this.addExplosion(b.x, b.y, '#60a5fa', 12);
+          this.sfx.shieldAbsorb(); // T09: audible absorption, distinct from playerHit/shieldUp
         } else {
           this.damagePlayer(b.dmg || 5, { sourceType: 'projectile', enemyType: b.type });
         }

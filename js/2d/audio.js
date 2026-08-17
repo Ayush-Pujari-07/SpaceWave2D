@@ -68,6 +68,10 @@ export class Sfx {
   // T07: restrained heal blip — quieter than pickup; the game throttles call rate
   heal() { this.tone({ type: 'sine', f0: 660, f1: 990, dur: 0.08, vol: 0.07 }); }
   shieldUp() { this.tone({ f0: 300, f1: 620, dur: 0.25, vol: 0.15 }); }
+  // T09: soft onboarding blip — quieter than pickup, no urgency
+  hint() { this.tone({ type: 'triangle', f0: 880, f1: 1174.7, dur: 0.1, vol: 0.08 }); }
+  // T09: shield absorption — short high sine blip, distinct from playerHit (saw+noise) and shieldUp (long sweep)
+  shieldAbsorb() { this.tone({ type: 'sine', f0: 1400, f1: 2100, dur: 0.08, vol: 0.12 }); }
   fuelLow() { this.tone({ type: 'sine', f0: 320, f1: 240, dur: 0.14, vol: 0.1 }); }
   fuelEmpty() { this.tone({ type: 'sawtooth', f0: 170, f1: 70, dur: 0.24, vol: 0.13 }); }
   playerHit() {

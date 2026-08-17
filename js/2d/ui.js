@@ -44,6 +44,8 @@ export class UI {
       waveBar: document.getElementById('waveBar'),
       boostBar: document.getElementById('boostBar'),
       legend: document.getElementById('legend'),
+      hint: document.getElementById('hint'),
+      resetHints: document.getElementById('resetHints'),
     };
   }
   updateHUD(state) {
@@ -162,6 +164,12 @@ export class UI {
     this.hideHUD();
   }
   hideStart() { this.el.startScreen.style.display = 'none'; this.showHUD(); }
+  // T09: contextual onboarding hint — calm DOM toast, never pauses combat
+  showHint(text) {
+    this.el.hint.textContent = text;
+    this.el.hint.style.display = 'block';
+  }
+  hideHint() { this.el.hint.style.display = 'none'; }
   showHUD() {
     this.el.hudTop.style.display = 'grid';
     this.el.waveBar.style.display = 'block';

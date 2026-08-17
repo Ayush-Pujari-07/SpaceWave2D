@@ -71,6 +71,8 @@ export const CONFIG = {
   debriefSwarmNearby: 5,     // nearby-enemy count that reads as swarm pressure
   debriefCorneredNearby: 2,  // nearby-enemy count needed for a "cornered" contact death
   debriefEdgeRatio: 0.15,    // arena-edge band (fraction of width/height)
+  // T09: learn-by-playing hint durations (seconds) — DOM toasts, one active at a time
+  hintDurations: { move: 6, boost: 6, emptyFuel: 7, spawnWarn: 5, upgrade: 9 },
   // fx
   particleCap: 320,
 };
