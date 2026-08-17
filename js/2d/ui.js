@@ -22,6 +22,14 @@ export class UI {
       finalScore: document.getElementById('finalScore'),
       bestFinal: document.getElementById('bestFinal'),
       newRecord: document.getElementById('newRecord'),
+      debriefFinding: document.getElementById('debriefFinding'),
+      debriefExplain: document.getElementById('debriefExplain'),
+      debriefSuggestion: document.getElementById('debriefSuggestion'),
+      buildTags: document.getElementById('buildTags'),
+      finalTime: document.getElementById('finalTime'),
+      finalKills: document.getElementById('finalKills'),
+      finalCombo: document.getElementById('finalCombo'),
+      finalPerfects: document.getElementById('finalPerfects'),
       nextWave: document.getElementById('nextWave'),
       restart: document.getElementById('restart'),
       startScreen: document.getElementById('startScreen'),
@@ -111,11 +119,40 @@ export class UI {
     });
   }
   hideWaveComplete() { this.el.waveComplete.style.display = 'none'; }
-  showGameOver(wave, score, best, isNew) {
+  formatTime(totalSeconds) {
+    const t = Math.max(0, Math.floor(Number.isFinite(totalSeconds) ? totalSeconds : 0));
+    return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+  }
+  showGameOver(wave, score, best, isNew, debrief = null) {
+    const db = debrief || {};
+    const f = db.finding || {};
     this.el.finalWave.textContent = wave;
     this.el.finalScore.textContent = Math.floor(score);
     this.el.bestFinal.textContent = Math.floor(best);
     this.el.newRecord.style.display = isNew ? 'block' : 'none';
+    // T08: Run Debrief — one finding, explanation, and next-run suggestion (safe fallbacks)
+    this.el.debriefFinding.textContent = f.title || 'Sustained damage over the wave';
+    this.el.debriefExplain.textContent = f.explanation || 'The run ended under sustained pressure.';
+    this.el.debriefSuggestion.textContent = f.suggestion || 'Keep moving and watch for spawn warnings.';
+    // Build summary: compact tags for actually selected upgrades only
+    const tags = this.el.buildTags;
+    tags.innerHTML = '';
+    const items = Array.isArray(db.build) ? db.build : [];
+    if (items.length === 0) {
+      tags.textContent = 'No upgrades — vanilla hull';
+    } else {
+      for (const it of items) {
+        const tag = document.createElement('span');
+        tag.className = 'buildTag';
+        tag.textContent = `${it.icon || ''} ${it.name || it.id || 'upgrade'}`.trim();
+        tags.appendChild(tag);
+      }
+    }
+    // Score report: finite values only
+    this.el.finalTime.textContent = this.formatTime(db.time);
+    this.el.finalKills.textContent = Math.floor(db.kills ?? 0);
+    this.el.finalCombo.textContent = `×${Math.floor(db.highestCombo ?? 1)}`;
+    this.el.finalPerfects.textContent = Math.floor(db.perfects ?? 0);
     this.el.gameOver.style.display = 'block';
   }
   hideGameOver() { this.el.gameOver.style.display = 'none'; }

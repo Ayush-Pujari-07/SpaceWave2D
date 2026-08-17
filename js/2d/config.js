@@ -66,6 +66,11 @@ export const CONFIG = {
   // T04: skill-based scoring — Perfect Clear bonus (no passive survival drip)
   perfectClearBase: 250,     // base bonus for ending a wave with zero unshielded hits
   perfectClearPerWave: 100,  // added for each wave number above wave 1
+  // T08: Run Debrief — heuristic death-analysis thresholds
+  debriefNearbyRadius: 220,  // px radius for counting "nearby" enemies at the final hit
+  debriefSwarmNearby: 5,     // nearby-enemy count that reads as swarm pressure
+  debriefCorneredNearby: 2,  // nearby-enemy count needed for a "cornered" contact death
+  debriefEdgeRatio: 0.15,    // arena-edge band (fraction of width/height)
   // fx
   particleCap: 320,
 };

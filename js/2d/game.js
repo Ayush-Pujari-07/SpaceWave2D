@@ -178,6 +178,7 @@ export class Game2D {
       perfectWaves: 0,
     };
     this.resetWaveStats();
+    this.lastDamage = null; // T08: final-hit context for the Run Debrief
   }
 
   resetWaveStats() {
@@ -424,7 +425,101 @@ export class Game2D {
     const s = Math.floor(this.score);
     const isNew = s > this.best;
     if (isNew) { this.best = s; localStorage.setItem('sw2d_best', String(this.best)); }
-    this.ui.showGameOver(this.wave, s, this.best, isNew);
+    this.ui.showGameOver(this.wave, s, this.best, isNew, this.buildDebrief());
+  }
+
+  // ---------- T08: Run Debrief (heuristic combat analysis) ----------
+
+  countNearbyEnemies(x, y, radius) {
+    let n = 0;
+    for (const e of this.enemies) {
+      if (Math.hypot(e.x - x, e.y - y) <= radius) n++;
+    }
+    return n;
+  }
+
+  nearArenaEdge(x, y) {
+    const bx = this.W * CONFIG.debriefEdgeRatio;
+    const by = this.H * CONFIG.debriefEdgeRatio;
+    return x < bx || x > this.W - bx || y < by || y > this.H - by;
+  }
+
+  // Exactly one finding from the priority-ordered rules; weak evidence is worded "likely".
+  analyzeRun() {
+    const d = this.lastDamage;
+    const ws = this.waveStats || { hitsTaken: 0, damageTaken: 0, enemiesKilled: 0 };
+    const nearby = d ? d.nearbyEnemies : 0;
+    const family = d ? d.waveFamily : this.waveFamily;
+    // 1. Low mobility — boost unavailable on the final hit
+    if (d && d.playerFuel <= 0) {
+      return {
+        title: 'Low mobility',
+        explanation: 'Your boost fuel was empty on the final hit, so you could not burst away from the pressure.',
+        suggestion: 'Collect amber fuel pods or take Ion Reserve before pushing into dense waves.',
+      };
+    }
+    // 2. Overwhelmed by swarm pressure
+    if (nearby >= CONFIG.debriefSwarmNearby || family === 'swarm') {
+      return {
+        title: 'Overwhelmed by swarm pressure',
+        explanation: nearby >= CONFIG.debriefSwarmNearby
+          ? `${nearby} enemies were close when you fell — the horde closed in faster than you could clear it.`
+          : 'You likely fell during a swarm wave — those waves stack numbers over time and punish standing still.',
+        suggestion: 'Keep moving in wide arcs and let auto-fire thin the horde; avoid stopping mid-swarm.',
+      };
+    }
+    // 3. Cornered — contact death at the arena edge with multiple enemies
+    if (d && d.sourceType === 'contact' && nearby >= CONFIG.debriefCorneredNearby && this.nearArenaEdge(this.ship.x, this.ship.y)) {
+      return {
+        title: 'Cornered',
+        explanation: `You were pressed against the arena edge with ${nearby} enemies nearby when contact ended the run.`,
+        suggestion: 'When enemies close in, boost toward open space and keep a wall-free escape route.',
+      };
+    }
+    // 4. Low focused damage — durable precision-wave survivors
+    if (family === 'precision' && (this.enemies.length >= 2 || ws.enemiesKilled < this.waveTotal / 2)) {
+      return {
+        title: 'Low focused damage',
+        explanation: `The precision wave outlasted your fire — ${ws.enemiesKilled} of ${this.waveTotal} cleared${this.enemies.length ? `, ${this.enemies.length} still alive when you fell` : ''}.`,
+        suggestion: 'Durable targets need sustained fire — consider Heavy Cannon or Split Shot at the next upgrade screen.',
+      };
+    }
+    // 5. Missed a telegraphed attack — sniper/boss projectile final hit
+    if (d && d.sourceType === 'projectile' && (d.enemyType === 'sniper' || d.enemyType === 'boss')) {
+      return d.enemyType === 'sniper'
+        ? {
+            title: 'Missed a telegraphed attack',
+            explanation: 'The final hit came from a sniper — snipers show a dashed aim line during windup before firing.',
+            suggestion: 'Move off the dashed aim line as soon as you see a sniper winding up.',
+          }
+        : {
+            title: 'Missed a telegraphed attack',
+            explanation: 'The final hit came from the Overlord — its bullet patterns repeat and are readable.',
+            suggestion: 'Track the Overlord\'s repeating patterns and keep moving between bursts.',
+          };
+    }
+    // 6. Fallback
+    return {
+      title: 'Sustained damage over the wave',
+      explanation: `You took ${ws.hitsTaken} hits for ${Math.round(ws.damageTaken)} damage this wave — the pressure added up.`,
+      suggestion: 'Use blue shields and keep moving through dense fire to stretch the run.',
+    };
+  }
+
+  buildDebrief() {
+    const rs = this.runStats || {};
+    const defs = this.upgradeDefinitions || [];
+    return {
+      finding: this.analyzeRun(),
+      build: [...(this.selectedUpgradeIds || [])].map(id => {
+        const def = defs.find(o => o.id === id);
+        return def ? { icon: def.icon, name: def.name } : { icon: '', name: id };
+      }),
+      time: rs.elapsed ?? 0,
+      kills: rs.enemiesKilled ?? 0,
+      highestCombo: rs.highestCombo ?? 1,
+      perfects: rs.perfectWaves ?? 0,
+    };
   }
 
   // ---------- fx helpers ----------
@@ -494,13 +589,23 @@ export class Game2D {
     });
   }
 
-  damagePlayer(d) {
+  damagePlayer(d, source = null) {
     this.health -= d;
     // T01: unshielded damage (shielded hits never reach this method)
     this.runStats.damageTaken += d;
     this.runStats.hitsTaken += 1;
     this.waveStats.damageTaken += d;
     this.waveStats.hitsTaken += 1;
+    // T08: record final-hit context (overwritten each hit; at death it is the last hit)
+    this.lastDamage = {
+      sourceType: (source && source.sourceType) || 'unknown',
+      enemyType: (source && source.enemyType) || null,
+      amount: d,
+      playerFuel: this.boostFuel,
+      nearbyEnemies: this.countNearbyEnemies(this.ship.x, this.ship.y, CONFIG.debriefNearbyRadius),
+      waveFamily: this.waveFamily,
+      timestamp: this.time,
+    };
     this.ship.invuln = 0.8;
     this.addShake(12);
     this.comboKills = 0;
@@ -789,7 +894,7 @@ export class Game2D {
       if (this.ship.invuln <= 0 && dist < CONFIG.shipHitRadius + e.r * 0.75) {
         this.killEnemy(e, i, true);
         if (this.shieldTime > 0) this.addShake(6);
-        else this.damagePlayer(CONFIG.contactDamage * this.contactDamageMultiplier);
+        else this.damagePlayer(CONFIG.contactDamage * this.contactDamageMultiplier, { sourceType: 'contact', enemyType: e.type });
       }
     }
 
@@ -828,7 +933,7 @@ export class Game2D {
           this.addShake(5);
           this.addExplosion(b.x, b.y, '#60a5fa', 12);
         } else {
-          this.damagePlayer(b.dmg || 5);
+          this.damagePlayer(b.dmg || 5, { sourceType: 'projectile', enemyType: b.type });
         }
         this.enemyBullets.splice(i, 1);
       }

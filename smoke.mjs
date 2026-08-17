@@ -442,6 +442,84 @@ game.enemyBullets.length = 0; game.playerBullets.length = 0; game.pickups.length
 game.wave = 3; game.state = 'playing'; game.waveState = 'playing';
 game.waveRemainingToSpawn = 0; game.waveSpawnComplete = true;
 
+// --- T08 invariant: Run Debrief — exactly one valid finding, rule priority, finite report ---
+game.state = 'playing';
+game.waveState = 'playing';
+game.enemies.length = 0; game.pendingSpawns.length = 0;
+game.playerBullets.length = 0; game.enemyBullets.length = 0; game.pickups.length = 0;
+game.waveRemainingToSpawn = 0; game.waveSpawnComplete = true;
+game.health = game.maxHealth;
+game.boostFuel = 50;
+const shipHome = { x: game.ship.x, y: game.ship.y };
+// LOW_FUEL: empty fuel on the final hit beats the swarm rule (priority order)
+game.waveFamily = 'swarm';
+game.boostFuel = 0;
+game.damagePlayer(5, { sourceType: 'projectile', enemyType: 'fighter' });
+assert(game.lastDamage.playerFuel === 0 && game.lastDamage.sourceType === 'projectile' && game.lastDamage.waveFamily === 'swarm', 'lastDamage records source, fuel, and wave family');
+assert(game.analyzeRun().title === 'Low mobility', 'empty fuel on the final hit yields Low mobility (beats swarm rule)');
+// SWARM: fuel available, swarm family → overwhelmed
+game.health = game.maxHealth;
+game.boostFuel = 50;
+game.damagePlayer(5, { sourceType: 'projectile', enemyType: 'fighter' });
+assert(game.analyzeRun().title === 'Overwhelmed by swarm pressure', 'swarm family with fuel yields swarm pressure');
+// CORNERED: contact death at the arena edge with multiple nearby enemies
+game.waveFamily = 'movement';
+game.ship.x = 30; game.ship.y = 30;
+game.materializeSpawn({ x: 60, y: 60, t: 0, type: 'scout' });
+game.materializeSpawn({ x: 100, y: 80, t: 0, type: 'scout' });
+game.materializeSpawn({ x: 80, y: 120, t: 0, type: 'scout' });
+game.damagePlayer(5, { sourceType: 'contact', enemyType: 'scout' });
+assert(game.analyzeRun().title === 'Cornered', 'contact death at the edge with nearby enemies yields Cornered');
+// FOCUS: precision family with durable survivors (far from the ship, so not "nearby")
+game.enemies.length = 0;
+game.ship.x = shipHome.x; game.ship.y = shipHome.y;
+game.waveFamily = 'precision';
+game.materializeSpawn({ x: game.ship.x + 500, y: game.ship.y + 500, t: 0, type: 'tank' });
+game.materializeSpawn({ x: game.ship.x + 540, y: game.ship.y + 520, t: 0, type: 'tank' });
+game.damagePlayer(5, { sourceType: 'projectile', enemyType: 'tank' });
+assert(game.analyzeRun().title === 'Low focused damage', 'precision wave with survivors yields Low focused damage');
+// TELEGRAPH: sniper projectile final hit (wave fully cleared so the focus rule stays quiet)
+game.enemies.length = 0;
+game.waveStats.enemiesKilled = game.waveTotal;
+game.damagePlayer(5, { sourceType: 'projectile', enemyType: 'sniper' });
+assert(game.analyzeRun().title === 'Missed a telegraphed attack', 'sniper projectile final hit yields the telegraph finding');
+// FALLBACK: none of the specific signals → sustained damage
+game.waveFamily = 'movement';
+game.damagePlayer(5, { sourceType: 'projectile', enemyType: 'fighter' });
+const fb = game.analyzeRun();
+assert(fb.title === 'Sustained damage over the wave', 'no specific signal falls back to sustained damage');
+assert(typeof fb.explanation === 'string' && fb.explanation.length > 0 && typeof fb.suggestion === 'string' && fb.suggestion.length > 0, 'finding carries a non-empty explanation and suggestion');
+// MISSING: null lastDamage still yields a valid fallback (no undefined)
+const ldSave = game.lastDamage;
+game.lastDamage = null;
+const missing = game.analyzeRun();
+assert(missing.title && missing.explanation && missing.suggestion, 'missing lastDamage still yields a valid fallback finding');
+game.lastDamage = ldSave;
+// BUILD (empty): no selected upgrades → plain no-upgrades text
+game.selectedUpgradeIds = new Set();
+const emptyDebrief = game.buildDebrief();
+game.ui.showGameOver(3, 100, 200, false, emptyDebrief);
+assert(emptyDebrief.build.length === 0 && game.ui.el.buildTags.textContent.includes('No upgrades'), 'empty build renders the no-upgrades text');
+// END_TO_END: lethal hit → game-over overlay gets one finding, build tags, finite report
+game.selectedUpgradeIds = new Set(['hull-reinforcement']);
+game.waveFamily = 'movement';
+game.enemies.length = 0;
+game.boostFuel = 0;
+game.health = 1;
+game.damagePlayer(999, { sourceType: 'projectile', enemyType: 'fighter' });
+assert(game.state === 'gameover', 'lethal hit reaches game over');
+assert(game.ui.el.debriefFinding.textContent === 'Low mobility', 'game-over overlay shows the primary finding');
+assert(game.ui.el.debriefSuggestion.textContent.length > 0, 'game-over overlay shows a TRY NEXT suggestion');
+assert(game.ui.el.buildTags.children.length === 1 && game.ui.el.buildTags.children[0].textContent.includes('Hull Reinforcement'), 'build summary reflects selected upgrades');
+assert(/^\d+:\d{2}$/.test(game.ui.el.finalTime.textContent), `elapsed time renders as M:SS (${game.ui.el.finalTime.textContent})`);
+assert(isFiniteNum(+game.ui.el.finalKills.textContent) && isFiniteNum(+game.ui.el.finalCombo.textContent.replace('×', '')) && isFiniteNum(+game.ui.el.finalPerfects.textContent), 'score report fields are finite');
+// restart to a fresh run so the existing final sections run unchanged
+game.startGame();
+assert(game.state === 'playing' && game.wave === 1 && game.lastDamage === null, 'restart clears lastDamage and returns to a fresh run');
+// RESTART_BUTTON: the overlay button also restarts
+game.ui.el.restart.onclick();
+assert(game.state === 'playing' && game.wave === 1, 'restart button returns to a fresh run');
+
 // boss wave check (diagnostic only)
 if (game.state === 'playing') {
   game.wave = 5;

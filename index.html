@@ -49,6 +49,17 @@
   button.card:hover{background:#111a2e}
   button.secondary{background:#0f172a;border:1px solid var(--border);color:var(--text)}
   #newRecord{color:#fbbf24;font-weight:700;margin-bottom:10px;display:none;text-shadow:0 0 12px #fbbf2488}
+  .debrief{background:#0f172a;border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin:14px 0;text-align:left}
+  .debriefLabel{font-size:10px;letter-spacing:2px;opacity:0.6;margin-bottom:6px}
+  .debriefFinding{font-size:18px;font-weight:700;color:#f87171;margin-bottom:4px}
+  .debriefExplain{font-size:13px;opacity:0.85;margin-bottom:8px}
+  .debriefTryNext{font-size:13px}
+  .debriefTryNext .tryLabel{color:var(--accent);font-weight:700;letter-spacing:1px;font-size:11px;margin-right:6px}
+  .buildSummary{display:flex;flex-wrap:wrap;align-items:center;gap:6px;justify-content:center;margin:0 0 12px;font-size:12px}
+  .buildLabel{font-size:10px;letter-spacing:2px;opacity:0.6}
+  .buildTag{background:#1e293b;border:1px solid var(--border);border-radius:999px;padding:2px 10px}
+  .scoreReport{display:grid;grid-template-columns:repeat(2,minmax(150px,1fr));gap:4px 18px;justify-content:center;font-size:13px;margin-bottom:18px}
+  #gameOver #restart{font-size:18px;padding:14px 48px}
   .perfectClear{color:#fbbf24;font-weight:700;font-size:18px;letter-spacing:1px;margin-bottom:10px;text-shadow:0 0 14px #fbbf2488}
   kbd{background:#1e293b;border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-size:11px}
 </style>
@@ -117,10 +128,23 @@
 
 <div id="gameOver" class="overlay">
   <h1>Mission Failed</h1>
+  <div id="debrief" class="debrief">
+    <div class="debriefLabel">RUN DEBRIEF</div>
+    <div id="debriefFinding" class="debriefFinding"></div>
+    <div id="debriefExplain" class="debriefExplain"></div>
+    <div class="debriefTryNext"><span class="tryLabel">TRY NEXT</span> <span id="debriefSuggestion"></span></div>
+  </div>
+  <div id="buildSummary" class="buildSummary"><span class="buildLabel">BUILD</span><span id="buildTags"></span></div>
   <div id="newRecord">★ NEW RECORD ★</div>
-  <div style="margin:12px 0">Wave Reached: <strong id="finalWave">1</strong></div>
-  <div style="margin-bottom:4px">Score: <strong id="finalScore">0</strong></div>
-  <div style="margin-bottom:18px;opacity:0.7">Best: <strong id="bestFinal">0</strong></div>
+  <div id="scoreReport" class="scoreReport">
+    <div>Score: <strong id="finalScore">0</strong></div>
+    <div>Wave Reached: <strong id="finalWave">1</strong></div>
+    <div>Time Survived: <strong id="finalTime">0:00</strong></div>
+    <div>Enemies Destroyed: <strong id="finalKills">0</strong></div>
+    <div>Highest Combo: <strong id="finalCombo">×1</strong></div>
+    <div>Perfect Clears: <strong id="finalPerfects">0</strong></div>
+    <div>Best: <strong id="bestFinal">0</strong></div>
+  </div>
   <button id="restart">Restart</button>
 </div>
 
