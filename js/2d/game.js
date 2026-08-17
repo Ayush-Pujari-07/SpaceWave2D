@@ -290,6 +290,9 @@ export class Game2D {
       for (const k in fam.weights) {
         if (ENEMY_TYPES[k] && fam.weights[k] > 0) weights[k] = fam.weights[k];
       }
+      // T06: family weights only contribute Blockers in mid-game waves; the
+      // first-appearance wave gets exactly one deterministic Blocker instead
+      if (this.wave <= CONFIG.blockerMinWave) delete weights.blocker;
     }
     if (Object.keys(weights).length === 0) {
       // Fallback: legacy wave-scaled table (defensive; family is always set by spawnWave)
@@ -344,6 +347,13 @@ export class Game2D {
       this.pendingSpawns.push({ x: this.W / 2, y: 70, t: 1.8, type: 'boss' });
       this.banner = { text: '⚠ OVERLORD INBOUND ⚠', t: 2.5, color: '#f472b6' };
       this.sfx.bossWarning();
+    }
+    // T06: first appearance — exactly one Blocker with light support on the
+    // first eligible wave; the rest of the wave comes from the family
+    if (this.wave === CONFIG.blockerMinWave && this.waveRemainingToSpawn > 0) {
+      const pos = this.pickSpawnPos();
+      this.pendingSpawns.push({ ...pos, t: CONFIG.spawnWarnTime, type: 'blocker' });
+      this.waveRemainingToSpawn--;
     }
   }
 
@@ -674,6 +684,20 @@ export class Game2D {
         const a = dir + Math.PI / 2;
         moveAngle = Math.atan2(Math.sin(dir) * radial + Math.sin(a) * 0.5, Math.cos(dir) * radial + Math.cos(a) * 0.5);
         speedFactor = 0.7;
+      } else if (t.behavior === 'block') {
+        // T06: steer toward a clamped short-term prediction of the player —
+        // single-step lead on current velocity only (no future input, no
+        // iterative intercept), capped so it can't perfectly track or teleport
+        let px = this.ship.x + this.ship.vx * t.predictTime;
+        let py = this.ship.y + this.ship.vy * t.predictTime;
+        const ldx = px - this.ship.x, ldy = py - this.ship.y;
+        const ld = Math.hypot(ldx, ldy);
+        if (ld > t.predictLeadMax) {
+          px = this.ship.x + (ldx / ld) * t.predictLeadMax;
+          py = this.ship.y + (ldy / ld) * t.predictLeadMax;
+        }
+        e.blockTarget = { x: px, y: py };
+        moveAngle = Math.atan2(py - e.y, px - e.x);
       }
 
       // separation so enemies don't clump into one blob
@@ -731,6 +755,8 @@ export class Game2D {
             e.fireCooldown = e.fireRate;
           }
         }
+      } else if (t.behavior === 'block') {
+        // T06: no projectile — the Blocker's threat is positional
       } else {
         e.fireCooldown -= dt;
         if (e.fireCooldown <= 0 && dist < 700) {
@@ -971,8 +997,20 @@ export class Game2D {
         ctx.stroke();
         ctx.setLineDash([]);
       }
-      // hp bar for tanks & boss
-      if (e.hp < e.hpMax && (e.type === 'boss' || e.type === 'tank')) {
+      // T06: blocker intercept lane — short, dim, dashed (intent, not a beam)
+      if (e.type === 'blocker' && e.blockTarget) {
+        const a = Math.atan2(e.blockTarget.y - e.y, e.blockTarget.x - e.x);
+        ctx.strokeStyle = 'rgba(249,115,22,0.35)';
+        ctx.setLineDash([4, 6]);
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(e.x, e.y);
+        ctx.lineTo(e.x + Math.cos(a) * 70, e.y + Math.sin(a) * 70);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // hp bar for tanks, boss & blocker
+      if (e.hp < e.hpMax && (e.type === 'boss' || e.type === 'tank' || e.type === 'blocker')) {
         const bw = e.r * 1.6;
         ctx.fillStyle = 'rgba(15,23,42,0.8)';
         ctx.fillRect(e.x - bw / 2, e.y - e.r - 12, bw, 4);

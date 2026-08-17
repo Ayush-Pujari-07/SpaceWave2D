@@ -36,6 +36,7 @@ export const CONFIG = {
   waveEnemiesBase: 6,
   waveEnemyGrowth: 3,
   bossEvery: 5,
+  blockerMinWave: 3,  // T06: first wave eligible to spawn a Blocker
   // spawn system
   spawnMinBatch: 3,
   spawnMaxBatch: 10,
@@ -69,6 +70,7 @@ export const ENEMY_TYPES = {
   fighter: { name: 'Fighter',  color: '#ef4444', r: 18, speed: 85,  fireRate: 1.2, hpBase: 2,  score: 150,  bulletSpeed: 300, bulletDmg: 5,  behavior: 'chase' },
   tank:    { name: 'Tank',     color: '#9ca3af', r: 26, speed: 45,  fireRate: 2.5, hpBase: 6,  score: 250,  bulletSpeed: 260, bulletDmg: 7,  behavior: 'spread', bullets: 3 },
   sniper:  { name: 'Sniper',   color: '#a78bfa', r: 16, speed: 60,  fireRate: 2.6, hpBase: 2,  score: 200,  bulletSpeed: 900, bulletDmg: 12, behavior: 'snipe', windup: 0.7 },
+  blocker: { name: 'Blocker',  color: '#f97316', r: 24, speed: 110, fireRate: 0,   hpBase: 3,  score: 300,  bulletSpeed: 0,   bulletDmg: 0,  behavior: 'block', predictTime: 0.4, predictLeadMax: 140 },
   boss:    { name: 'Overlord', color: '#f472b6', r: 52, speed: 40,  fireRate: 2.4, hpBase: 80, score: 2000, bulletSpeed: 280, bulletDmg: 8,  behavior: 'boss' },
 };
 
@@ -78,8 +80,8 @@ export const ENEMY_TYPES = {
 export const WAVE_FAMILIES = {
   swarm:     { minWave: 1, weights: { scout: 60, fighter: 35, tank: 5,  sniper: 0  }, batch: [4, 10], delay: [0.8, 2.0] },
   precision: { minWave: 3, weights: { scout: 10, fighter: 25, tank: 40, sniper: 25 }, batch: [2, 4],  delay: [1.5, 3.0] },
-  movement:  { minWave: 4, weights: { scout: 55, fighter: 45, tank: 0,  sniper: 0  }, batch: [4, 8],  delay: [0.6, 1.6] },
-  panic:     { minWave: 3, weights: { scout: 40, fighter: 30, tank: 15, sniper: 15 }, batch: [5, 9],  delay: [0.5, 1.2], breathEvery: 2, breathDelay: [2.5, 3.5] },
+  movement:  { minWave: 4, weights: { scout: 45, fighter: 35, blocker: 20 }, batch: [4, 8],  delay: [0.6, 1.6] },
+  panic:     { minWave: 3, weights: { scout: 35, fighter: 25, tank: 10, sniper: 10, blocker: 20 }, batch: [5, 9],  delay: [0.5, 1.2], breathEvery: 2, breathDelay: [2.5, 3.5] },
 };
 
 export const PICKUP_TYPES = {

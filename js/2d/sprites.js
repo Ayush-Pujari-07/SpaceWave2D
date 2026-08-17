@@ -62,6 +62,18 @@ function enemySprite(t, color, white = false) {
         ctx.fillStyle = c;
         ctx.fillRect(0, -1.5, r * 1.2, 3);
         break;
+      case 'block': // blocker: wide heavy wedge with flat rear
+        ctx.beginPath();
+        ctx.moveTo(r * 0.9, 0);
+        ctx.lineTo(r * 0.3, -r * 0.85);
+        ctx.lineTo(-r * 0.8, -r * 0.7);
+        ctx.lineTo(-r * 0.8, r * 0.7);
+        ctx.lineTo(r * 0.3, r * 0.85);
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = c;
+        ctx.fillRect(-r * 0.45, -r * 0.5, r * 0.35, r);
+        break;
       default: // boss: spiky star
         ctx.beginPath();
         const spikes = 8;

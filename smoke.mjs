@@ -47,7 +47,7 @@ const assert = (cond, message) => {
 const isFiniteNum = v => typeof v === 'number' && Number.isFinite(v);
 
 const { Game2D } = await import('./js/2d/game.js');
-const { CONFIG, WAVE_FAMILIES } = await import('./js/2d/config.js');
+const { CONFIG, ENEMY_TYPES, WAVE_FAMILIES } = await import('./js/2d/config.js');
 const canvas = { width: 0, height: 0, style: {}, getContext: () => ctxProxy };
 const game = new Game2D(canvas);
 
@@ -261,7 +261,7 @@ assert(game.forceWaveFamily === null, 'one-shot force hook clears after use');
 game.waveSpawnTimer = 0; // queue exactly one batch, deterministically
 frames(1);
 const moveTypes = new Set(game.pendingSpawns.map(p => p.type));
-assert(game.pendingSpawns.length > 0 && [...moveTypes].every(t => t === 'scout' || t === 'fighter'), `movement family spawns only fast pressure (got ${[...moveTypes].join(',') || 'none'})`);
+assert(game.pendingSpawns.length > 0 && [...moveTypes].every(t => t === 'scout' || t === 'fighter' || t === 'blocker'), `movement family spawns only fast pressure + Blocker (got ${[...moveTypes].join(',') || 'none'})`);
 assert(game.waveSpawnTimer >= 0.6 && game.waveSpawnTimer <= 1.6, `next batch delay uses the family range (${game.waveSpawnTimer.toFixed(2)}s within [0.6, 1.6])`);
 // no consecutive family repeats when alternatives exist
 game.wave = 5;
@@ -290,6 +290,74 @@ const unknownPicks = new Set();
 for (let i = 0; i < 50; i++) unknownPicks.add(game.weightedPick());
 delete WAVE_FAMILIES.__test;
 assert(unknownPicks.size === 1 && unknownPicks.has('scout'), 'unknown weight keys are ignored by weightedPick');
+// restore a clean playing state for later sections
+game.enemies.length = 0; game.pendingSpawns.length = 0;
+game.enemyBullets.length = 0; game.playerBullets.length = 0; game.pickups.length = 0;
+game.wave = 3; game.state = 'playing'; game.waveState = 'playing';
+game.waveRemainingToSpawn = 0; game.waveSpawnComplete = true;
+
+// --- T06 invariant: Blocker enemy — clamped intercept, no projectiles, gated waves ---
+game.state = 'playing';
+game.waveState = 'playing';
+game.enemies.length = 0; game.pendingSpawns.length = 0;
+game.playerBullets.length = 0; game.enemyBullets.length = 0; game.pickups.length = 0;
+game.waveRemainingToSpawn = 0; game.waveSpawnComplete = false;
+// FIRST_APPEARANCE: wave 3 schedules exactly one Blocker; family support fills the rest
+game.wave = 3;
+game.spawnWave();
+const w3Blockers = game.pendingSpawns.filter(p => p.type === 'blocker');
+assert(w3Blockers.length === 1, `wave 3 first appearance schedules exactly one Blocker (got ${w3Blockers.length})`);
+assert(game.waveRemainingToSpawn === game.waveTotal - 1, 'first-appearance Blocker counts against the wave total');
+// ELIGIBILITY_GATE: family weights never pick Blocker at or before the first-appearance wave
+game.wave = 2;
+game.forceWaveFamily = 'panic'; // panic carries a blocker weight — the gate must suppress it
+game.spawnWave();
+const earlyPicks = new Set();
+for (let i = 0; i < 200; i++) earlyPicks.add(game.weightedPick());
+assert(!earlyPicks.has('blocker'), `family weights never pick Blocker at wave <= ${CONFIG.blockerMinWave} (got ${[...earlyPicks].join(',')})`);
+// PREDICT_CLAMP: Blocker steers toward a clamped projected point, not the player's current position
+game.wave = 3;
+game.forceWaveFamily = 'swarm';
+game.pendingSpawns.length = 0;
+game.spawnWave();
+game.enemies.length = 0;
+game.materializeSpawn({ x: game.ship.x + 300, y: game.ship.y, t: 0, type: 'blocker' });
+const blk = game.enemies[0];
+assert(blk && blk.type === 'blocker', 'Blocker type materializes via materializeSpawn');
+game.ship.vx = 2000; game.ship.vy = 0; // fast-moving player
+frames(2);
+const bt = ENEMY_TYPES.blocker;
+const leadDist = Math.hypot(blk.blockTarget.x - game.ship.x, blk.blockTarget.y - game.ship.y);
+assert(leadDist <= bt.predictLeadMax + 1e-6, `prediction lead is clamped to predictLeadMax (${leadDist.toFixed(1)} <= ${bt.predictLeadMax})`);
+assert(blk.blockTarget.x - game.ship.x > 0, 'prediction projects ahead of player velocity, not at the current position');
+const toTarget = Math.atan2(blk.blockTarget.y - blk.y, blk.blockTarget.x - blk.x);
+let headingErr = Math.abs(Math.atan2(blk.vy, blk.vx) - toTarget);
+if (headingErr > Math.PI) headingErr = 2 * Math.PI - headingErr;
+assert(headingErr < 0.35, `Blocker steers toward the projected point (heading error ${headingErr.toFixed(2)} rad)`);
+// NO_PROJ: Blocker in range with expired cooldown fires no projectiles
+blk.x = game.ship.x + 150; blk.y = game.ship.y;
+blk.fireCooldown = 0;
+game.ship.invuln = 1;
+game.enemyBullets.length = 0;
+frames(10);
+assert(!game.enemyBullets.some(b => b.type === 'blocker'), 'Blocker fires no projectiles even in range');
+// FAMILY_WEIGHT: mid-game movement family can pick Blocker
+game.wave = 4;
+game.forceWaveFamily = 'movement';
+game.spawnWave();
+const midPicks = new Set();
+for (let i = 0; i < 300; i++) midPicks.add(game.weightedPick());
+assert(midPicks.has('blocker'), `mid-game movement family can pick Blocker (got ${[...midPicks].join(',')})`);
+// SEPARATION: overlapping Blockers push apart (placed beyond autoRange so the player doesn't interfere)
+game.enemies.length = 0; game.pendingSpawns.length = 0;
+game.playerBullets.length = 0;
+game.materializeSpawn({ x: game.ship.x - 500, y: game.ship.y - 500, t: 0, type: 'blocker' });
+game.materializeSpawn({ x: game.ship.x - 490, y: game.ship.y - 500, t: 0, type: 'blocker' });
+const [b1, b2] = game.enemies;
+const sepD0 = Math.hypot(b1.x - b2.x, b1.y - b2.y);
+frames(60);
+const sepD1 = Math.hypot(b1.x - b2.x, b1.y - b2.y);
+assert(sepD1 > sepD0, `separation pushes overlapping Blockers apart (${sepD0.toFixed(1)} -> ${sepD1.toFixed(1)})`);
 // restore a clean playing state for later sections
 game.enemies.length = 0; game.pendingSpawns.length = 0;
 game.enemyBullets.length = 0; game.playerBullets.length = 0; game.pickups.length = 0;
